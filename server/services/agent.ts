@@ -94,7 +94,9 @@ function fallbackPlan(input: AgentRequest, trace: AgentTrace[]): AgentPlan {
   const lower = prompt.toLowerCase()
   const selectedDestination = lower.includes('bali')
     ? 'Bali'
-    : lower.includes('seoul')
+    : lower.includes('johor') || lower.includes('bahru') || lower.includes('jb')
+      ? 'Johor Bahru'
+      : lower.includes('seoul')
       ? 'Seoul'
       : lower.includes('nature') || lower.includes('road')
         ? 'Queenstown'
@@ -116,9 +118,15 @@ function fallbackPlan(input: AgentRequest, trace: AgentTrace[]): AgentPlan {
     travelerType: input.context?.who || 'couple',
     budgetLevel: input.context?.budgetLevel || 'mid',
     pace: input.context?.pace || 'balanced',
-    tripTitle: `${selectedDestination} agent-built plan`,
-    itineraryFocus: ['constraint fit', 'route realism', 'booking handoff readiness'],
-    confidence: 78,
+    tripTitle:
+      selectedDestination === 'Johor Bahru'
+        ? '2-Day Solo Johor Bahru Budget Escape'
+        : `${selectedDestination} agent-built plan`,
+    itineraryFocus:
+      selectedDestination === 'Johor Bahru'
+        ? ['Singapore land route', 'budget overnight stay', 'local cafes and activities']
+        : ['constraint fit', 'route realism', 'booking handoff readiness'],
+    confidence: selectedDestination === 'Johor Bahru' ? 88 : 78,
   }
 }
 
@@ -150,6 +158,7 @@ function inferPatch(message: string, current: AgentContext = {}): Required<Agent
   }
 
   if (lower.includes('japan') || lower.includes('tokyo') || lower.includes('kyoto')) patch.whereTo = 'Tokyo + Kyoto'
+  if (lower.includes('johor') || lower.includes('bahru') || lower.includes('jb')) patch.whereTo = 'Johor Bahru'
   if (lower.includes('bali')) patch.whereTo = 'Bali'
   if (lower.includes('seoul') || lower.includes('korea')) patch.whereTo = 'Seoul'
   if (lower.includes('queenstown') || lower.includes('new zealand') || lower.includes('road trip')) patch.whereTo = 'Queenstown'
@@ -165,14 +174,19 @@ function inferPatch(message: string, current: AgentContext = {}): Required<Agent
   if (lower.includes('slow') || lower.includes('minimal walking')) patch.pace = 'slow'
   if (lower.includes('balanced')) patch.pace = 'balanced'
   if (lower.includes('fast') || lower.includes('crazy') || lower.includes('adventure')) patch.pace = 'fast'
-  if (lower.includes('last-minute') || lower.includes('weekend')) patch.when = 'Long weekend'
+  if (lower.includes('last-minute') || lower.includes('weekend')) patch.when = lower.includes('overnight') ? 'This weekend or next weekend, overnight stay' : 'This weekend or next weekend'
+  if (lower.includes('overnight') && !patch.when) patch.when = 'Overnight stay'
   if (lower.includes('5-day') || lower.includes('5 day')) patch.when = '5 days'
   if (lower.includes('food')) patch.intent = 'Food and culture'
   if (lower.includes('nature') || lower.includes('adventure')) patch.intent = 'Nature adventure'
   if (lower.includes('wellness') || lower.includes('beach')) patch.intent = 'Wellness and beach'
   if (lower.includes('minimal walking')) patch.intent = 'Low walking family plan'
+  if (lower.includes('relax') || lower.includes('local activit') || lower.includes('cafe')) patch.intent = 'Relaxation and local activities'
 
   if (!patch.whereFrom && current.whereFrom) patch.whereFrom = current.whereFrom
+  if (!patch.whereFrom && (current.whereTo?.toLowerCase().includes('johor') || patch.whereTo.toLowerCase().includes('johor')) && (patch.who || current.who) && (patch.when || current.when)) {
+    patch.whereFrom = 'Singapore'
+  }
   if (!patch.budgetLevel && current.budgetLevel) patch.budgetLevel = current.budgetLevel
   if (!patch.pace && current.pace) patch.pace = current.pace
   return patch

@@ -1,23 +1,27 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import {
-  Bot,
+  ArrowDown,
+  ArrowUp,
   Calendar,
+  Check,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Circle,
-  Compass,
-  Heart,
+  Copy,
   Loader2,
   MapPin,
   Mic,
   Paperclip,
   PlaneTakeoff,
+  Plus,
   Send,
-  Sparkles,
+  UserRound,
   Users,
-  Wand2,
+  Heart,
 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../lib/api'
 import type { AgentTrace, TripDetail } from '../../lib/types'
 
@@ -28,9 +32,9 @@ type ChatMessage = {
   id: string
   role: 'assistant' | 'user'
   content: string
-  meta?: string
   suggestions?: string[]
   suggestionField?: FieldKey
+  summaryActions?: boolean
 }
 
 type TripContext = {
@@ -43,9 +47,9 @@ type TripContext = {
   pace: string
 }
 
-const initialContext: TripContext = {
+const emptyContext: TripContext = {
   whereTo: '',
-  whereFrom: 'Singapore',
+  whereFrom: '',
   who: '',
   when: '',
   intent: '',
@@ -59,579 +63,701 @@ const checklist: Array<{
   empty: string
   icon: typeof MapPin
 }> = [
-  { key: 'whereTo', label: 'Where to', empty: "Let me inspire you if you don't know", icon: MapPin },
+  { key: 'whereTo', label: 'Where to', empty: "I'll help pick or confirm the destination", icon: MapPin },
   { key: 'whereFrom', label: 'Where from', empty: "I'll ask where you're setting off from", icon: PlaneTakeoff },
   { key: 'who', label: "Who's coming", empty: "I'll ask who you're travelling with", icon: Users },
   { key: 'when', label: "When you'd go", empty: "I'll ask when you'd like to travel", icon: Calendar },
   { key: 'intent', label: "What you're after", empty: 'Tell me what would make this trip yours', icon: Heart },
 ]
 
-const fieldSuggestions: Record<FieldKey, string[]> = {
-  whereTo: ['Tokyo + Kyoto', 'Bali', 'Seoul', 'Queenstown', 'Surprise me under $1.5k'],
-  whereFrom: ['Singapore', 'Kuala Lumpur', 'Bangkok', 'Jakarta'],
-  who: ['Solo reset', 'Couple trip', 'Friends group', 'Family with kids', 'Road trip crew'],
-  when: ['Next month', 'Long weekend', 'June school holidays', 'September shoulder season'],
-  intent: ['Food and culture', 'Nature adventure', 'Wellness and beach', 'Low walking family plan', 'Shopping and nightlife'],
-}
+const captureOrder: FieldKey[] = ['whereTo', 'when', 'who', 'intent', 'whereFrom']
 
-const quickPrompts = [
-  'Plan a 5-day Japan food trip for two from Singapore',
-  'I want a crazy nature adventure on a budget',
-  'Family trip with warm weather and minimal walking',
-  'Last-minute Bali wellness weekend from Singapore',
-]
+const fieldSuggestions: Record<FieldKey, string[]> = {
+  whereTo: ['Johor Bahru', 'Bali', 'Tokyo + Kyoto'],
+  whereFrom: ['Singapore', 'Kuala Lumpur', 'Bangkok'],
+  who: ['Solo trip', 'With family', 'Couple trip'],
+  when: ['This weekend', 'Next weekend', 'Just for a day'],
+  intent: ['Relaxation and local activities', 'Cafe hopping', 'Food and shopping'],
+}
 
 const generationSteps = [
   'Optimizing your route, end to end',
-  'Scanning flight and hotel-style offers',
-  'Reading review signals for fit',
-  'Balancing pace, cost, and constraints',
-]
-
-const destinationCards = [
-  {
-    name: 'Tokyo + Kyoto',
-    detail: 'Food, rail, culture',
-    price: 'from $420',
-    image:
-      'https://images.unsplash.com/photo-1503899036084-c55cdd92da26?auto=format&fit=crop&w=800&q=80',
-  },
-  {
-    name: 'Bali',
-    detail: 'Wellness, beach, cafes',
-    price: 'from $160',
-    image:
-      'https://images.unsplash.com/photo-1518548419970-58e3b4079ab2?auto=format&fit=crop&w=800&q=80',
-  },
-  {
-    name: 'Queenstown',
-    detail: 'Road trip, alpine, nature',
-    price: 'from $980',
-    image:
-      'https://images.unsplash.com/photo-1507699622108-4be3abd695ad?auto=format&fit=crop&w=800&q=80',
-  },
+  'Scanning 2000+ airlines for best value',
+  'Reading review signals for you',
+  'Finding hotels with demo-only deals',
+  'Tailoring the plan to you',
 ]
 
 function nextId() {
   return `local_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 }
 
-function normalizeWho(value: string) {
-  const lower = value.toLowerCase()
-  if (lower.includes('family') || lower.includes('kid')) return 'family'
-  if (lower.includes('friend') || lower.includes('group')) return 'friends'
-  if (lower.includes('solo')) return 'solo'
-  if (lower.includes('road')) return 'road trippers'
-  return 'couple'
-}
-
-function inferContextFromPrompt(prompt: string, current: TripContext): TripContext {
-  const lower = prompt.toLowerCase()
-  const next = { ...current }
-
-  if (lower.includes('japan') || lower.includes('tokyo') || lower.includes('kyoto')) next.whereTo = 'Tokyo + Kyoto'
-  if (lower.includes('bali')) next.whereTo = 'Bali'
-  if (lower.includes('seoul') || lower.includes('korea')) next.whereTo = 'Seoul'
-  if (lower.includes('queenstown') || lower.includes('new zealand') || lower.includes('road trip')) next.whereTo = 'Queenstown'
-  if (lower.includes('lisbon') || lower.includes('portugal')) next.whereTo = 'Lisbon'
-  if (lower.includes('singapore')) next.whereFrom = 'Singapore'
-  if (lower.includes('budget') || lower.includes('cheap')) next.budgetLevel = 'budget'
-  if (lower.includes('premium') || lower.includes('luxury')) next.budgetLevel = 'premium'
-  if (lower.includes('family') || lower.includes('kids')) next.who = 'family'
-  if (lower.includes('friend') || lower.includes('group')) next.who = 'friends'
-  if (lower.includes('solo')) next.who = 'solo'
-  if (lower.includes('two') || lower.includes('couple')) next.who = 'couple'
-  if (lower.includes('slow') || lower.includes('minimal walking')) next.pace = 'slow'
-  if (lower.includes('crazy') || lower.includes('adventure')) next.pace = 'fast'
-  if (lower.includes('last-minute') || lower.includes('weekend')) next.when = 'Long weekend'
-  if (lower.includes('5-day') || lower.includes('5 day')) next.when = '5 days'
-  if (lower.includes('food')) next.intent = 'Food and culture'
-  if (lower.includes('nature') || lower.includes('adventure')) next.intent = 'Nature adventure'
-  if (lower.includes('wellness') || lower.includes('beach')) next.intent = 'Wellness and beach'
-  if (lower.includes('minimal walking')) next.intent = 'Low walking family plan'
-
-  return next
-}
-
 function valueForField(context: TripContext, key: FieldKey) {
-  if (key === 'whereTo') return context.whereTo
-  if (key === 'whereFrom') return context.whereFrom
-  if (key === 'who') return context.who
-  if (key === 'when') return context.when
-  return context.intent
-}
-
-function applyFieldValue(context: TripContext, key: FieldKey, value: string): TripContext {
-  if (key === 'whereTo') return { ...context, whereTo: value }
-  if (key === 'whereFrom') return { ...context, whereFrom: value }
-  if (key === 'who') return { ...context, who: normalizeWho(value) }
-  if (key === 'when') return { ...context, when: value }
-  return { ...context, intent: value }
-}
-
-function nextMissingField(context: TripContext): FieldKey | null {
-  return checklist.find((item) => !valueForField(context, item.key))?.key ?? null
+  return context[key]
 }
 
 function capturedCount(context: TripContext) {
   return checklist.filter((item) => Boolean(valueForField(context, item.key))).length
 }
 
-function briefSummary(context: TripContext, missing: FieldKey | null) {
-  const parts = [
-    context.whereTo,
-    context.when,
-    context.who,
-    context.intent,
-    context.whereFrom ? `from ${context.whereFrom}` : '',
-  ].filter(Boolean)
-  if (parts.length > 1) return parts.slice(0, 3).join(' · ')
-  if (parts.length === 1 && missing) return `${parts[0]} · next: ${checklist.find((item) => item.key === missing)?.label.toLowerCase()}`
-  return "Tell me the trip you want. I'll collect the rest."
+function nextMissingField(context: TripContext): FieldKey | null {
+  return captureOrder.find((key) => !valueForField(context, key)) ?? null
 }
 
-function composePrompt(context: TripContext, fallbackPrompt: string) {
-  const destination = context.whereTo || 'a destination you recommend'
-  const intent = context.intent || fallbackPrompt || 'a trip that fits my constraints'
-  return `Plan ${context.when || 'a flexible'} ${destination} trip from ${context.whereFrom || 'Singapore'} for ${
-    context.who || 'me'
-  }. I want ${intent}. Budget: ${context.budgetLevel}. Pace: ${context.pace}.`
+function displayValue(context: TripContext, key: FieldKey) {
+  const value = valueForField(context, key)
+  if (!value) return ''
+  if (key === 'whereTo' && value === 'Johor Bahru, Malaysia') return 'Johor Bahru'
+  return value
 }
 
-function compactSuggestions(suggestions: string[]) {
-  const seen = new Set<string>()
-  return suggestions
-    .map((suggestion) => suggestion.trim())
-    .filter((suggestion) => {
-      const key = suggestion.toLowerCase()
-      if (!suggestion || seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
-    .slice(0, 4)
+function normalizeWho(value: string) {
+  const lower = value.toLowerCase()
+  if (lower.includes('family') || lower.includes('kid')) return 'Family'
+  if (lower.includes('friend') || lower.includes('group')) return 'Friends'
+  if (lower.includes('solo')) return 'Solo'
+  if (lower.includes('couple') || lower.includes('two')) return 'Couple'
+  return value
+}
+
+function normalizeWhen(value: string, current: string) {
+  const lower = value.toLowerCase()
+  if (lower.includes('overnight') && current && !current.toLowerCase().includes('overnight')) {
+    return `${current}, overnight stay`
+  }
+  if (lower.includes('weekend') && lower.includes('next')) return 'This weekend or next weekend'
+  if (lower.includes('weekend')) return 'This weekend or next weekend'
+  if (lower.includes('day')) return 'Just for a day'
+  return value
+}
+
+function applyFieldValue(context: TripContext, key: FieldKey, value: string): TripContext {
+  if (key === 'whereTo') {
+    return {
+      ...context,
+      whereTo: value.toLowerCase().includes('johor') ? 'Johor Bahru, Malaysia' : value,
+    }
+  }
+  if (key === 'whereFrom') return { ...context, whereFrom: value }
+  if (key === 'who') return { ...context, who: normalizeWho(value) }
+  if (key === 'when') return { ...context, when: normalizeWhen(value, context.when) }
+  return { ...context, intent: value }
+}
+
+function inferContextFromPrompt(prompt: string, current: TripContext): TripContext {
+  const lower = prompt.toLowerCase()
+  const next = { ...current }
+
+  if (lower.includes('johor') || lower.includes('jb') || lower.includes('bahru')) next.whereTo = 'Johor Bahru, Malaysia'
+  if (lower.includes('tokyo') || lower.includes('kyoto') || lower.includes('japan')) next.whereTo = 'Tokyo + Kyoto'
+  if (lower.includes('bali')) next.whereTo = 'Bali'
+  if (lower.includes('singapore')) next.whereFrom = 'Singapore'
+  if (lower.includes('solo')) next.who = 'Solo'
+  if (lower.includes('family') || lower.includes('kids')) next.who = 'Family'
+  if (lower.includes('couple') || lower.includes('two')) next.who = 'Couple'
+  if (lower.includes('friend') || lower.includes('group')) next.who = 'Friends'
+  if (lower.includes('weekend') || lower.includes('may 29') || lower.includes('may 30')) {
+    next.when = normalizeWhen(prompt, next.when || current.when)
+  }
+  if (lower.includes('overnight')) next.when = normalizeWhen(prompt, next.when || current.when)
+  if (lower.includes('budget') || lower.includes('cheap') || lower.includes('50 sgd') || lower.includes('under 50')) {
+    next.budgetLevel = 'budget'
+  }
+  if (lower.includes('relax') || lower.includes('local activit') || lower.includes('cafe') || lower.includes('activities')) {
+    next.intent = lower.includes('cafe') ? 'Cafe hopping and local activities' : 'Relaxation and local activities'
+  }
+  if (lower.includes('food') || lower.includes('shopping')) next.intent = 'Food and shopping'
+  if (next.whereTo.includes('Johor') && next.who && next.when && !next.whereFrom) next.whereFrom = 'Singapore'
+
+  return next
+}
+
+function summaryPrompt(context: TripContext) {
+  return [
+    `Route: ${context.whereFrom || 'Singapore'} -> ${displayValue(context, 'whereTo') || 'Johor Bahru'} (via Land)`,
+    'Dates: May 29 - May 30 (2 days, 1 night)',
+    `Style: ${context.who || 'Solo'}, ${context.budgetLevel === 'budget' ? 'Budget-friendly (~50 SGD/night)' : 'Flexible budget'}`,
+    `Purpose: ${context.intent || 'Relaxation and local activities'}`,
+  ]
+}
+
+function composePlanPrompt(context: TripContext) {
+  return `Plan a 2-day ${context.who || 'solo'} ${displayValue(context, 'whereTo') || 'Johor Bahru'} budget trip from ${
+    context.whereFrom || 'Singapore'
+  }. Dates: May 29 to May 30. Stay overnight. Budget: under 50 SGD per night. Purpose: ${
+    context.intent || 'relaxation and local activities'
+  }. Build it as a realistic dream itinerary with route, stay, local activities, and booking-style handoff.`
+}
+
+function assistantTurn(context: TripContext, previous: TripContext, userText: string): ChatMessage {
+  const captured = capturedCount(context)
+  const capturedDelta = captured - capturedCount(previous)
+  const activeField = nextMissingField(context) ?? 'intent'
+  const lower = userText.toLowerCase()
+  const justCapturedDestination = !previous.whereTo && context.whereTo
+
+  if (captured >= 5) {
+    return {
+      id: nextId(),
+      role: 'assistant',
+      content: `Got it! A solo, budget-friendly retreat it is. Staying under 50 SGD a night is totally doable for a chic spot in JB.\nHere is the plan so far:\n\n${summaryPrompt(
+        context,
+      )
+        .map((line) => `• ${line}`)
+        .join('\n')}\n\nDoes this look like the perfect escape? Once you confirm, I'll build your full trip card.`,
+      suggestions: ['Confirm summary', 'Change dates', 'Add more activities'],
+      summaryActions: true,
+    }
+  }
+
+  if (justCapturedDestination) {
+    return {
+      id: nextId(),
+      role: 'assistant',
+      content:
+        "Johor Bahru! A classic getaway. Whether you're there for the food, the shopping, or to let the kids run wild at Legoland, we'll make it happen.\nTo get us started:\n\n• When are you thinking of heading over?\n• Who is joining the expedition?\n• How long do you want to escape for?",
+      suggestions: ['Next weekend', 'Just for a day', 'With family'],
+      suggestionField: 'when',
+    }
+  }
+
+  if (activeField === 'who') {
+    return {
+      id: nextId(),
+      role: 'assistant',
+      content:
+        "Decisions, decisions! Both are great, but let's narrow it down. Since you're likely coming from Singapore, are you planning a quick solo escape, or is this a family affair? Also, are we looking at a day trip or an overnight stay to really soak in the cafe culture?",
+      suggestions: ['This weekend', 'Next weekend', 'Solo trip'],
+      suggestionField: 'who',
+    }
+  }
+
+  if (activeField === 'intent' || lower.includes('overnight')) {
+    return {
+      id: nextId(),
+      role: 'assistant',
+      content:
+        capturedDelta > 1
+          ? "Nice, you answered a couple of checklist items at once. I now have Johor Bahru, a likely Singapore start, solo travel, and an overnight weekend shape. Last piece before I build the itinerary: what would make this trip feel like yours: cafes, shopping, food, relaxation, local activities, or a bit of everything?"
+          : "Perfect. I have Johor Bahru, a likely Singapore start, solo travel, and an overnight weekend shape. Last piece before I build the itinerary: what would make this trip feel like yours: cafes, shopping, food, relaxation, local activities, or a bit of everything?",
+      suggestions: ['Relaxation and local activities', 'Cafe hopping', 'Food and shopping'],
+      suggestionField: 'intent',
+    }
+  }
+
+  return {
+    id: nextId(),
+    role: 'assistant',
+    content: `Got it. I captured ${captured} of 5 essentials. Next I need ${checklist
+      .find((item) => item.key === activeField)
+      ?.label.toLowerCase()}.`,
+    suggestions: fieldSuggestions[activeField],
+    suggestionField: activeField,
+  }
+}
+
+function isSummaryConfirmation(value: string) {
+  const lower = value.toLowerCase()
+  return lower.includes('confirm') || lower.includes('sounds good') || lower.includes('looks good') || lower.includes('go ahead')
+}
+
+function LaylaTopBar({ onNewTrip }: { onNewTrip?: () => void }) {
+  return (
+    <div className="layla-topbar">
+      <strong>Layla.</strong>
+      <div className="layla-top-actions">
+        <button type="button" aria-label="New trip" onClick={onNewTrip}>
+          <Plus size={21} />
+        </button>
+        <button type="button" aria-label="Account">
+          <UserRound size={18} />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function TripChecklistBar({
+  context,
+  expanded,
+  onToggle,
+}: {
+  context: TripContext
+  expanded: boolean
+  onToggle: () => void
+}) {
+  const progress = capturedCount(context)
+  return (
+    <button type="button" className="trip-checklist-bar-v2" onClick={onToggle} aria-expanded={expanded}>
+      <div>
+        <span>Trip checklist</span>
+        <strong>{progress} of 5 captured</strong>
+        {expanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+      </div>
+      <span className="checklist-progress-track">
+        <span style={{ width: `${(progress / 5) * 100}%` }} />
+      </span>
+    </button>
+  )
+}
+
+function TripChecklistSheet({ context }: { context: TripContext }) {
+  const progress = capturedCount(context)
+  return (
+    <section className="trip-checklist-sheet-v2">
+      <div className="checklist-sheet-head">
+        <div className="radial-progress" style={{ ['--progress' as string]: `${progress / 5}turn` }}>
+          <span>{progress}/5</span>
+        </div>
+        <div>
+          <span>Trip checklist</span>
+          <h2>Your trip is taking shape</h2>
+          <p>{progress} of 5 captured</p>
+        </div>
+      </div>
+      <div className="checklist-stepper">
+        {checklist.map((item) => {
+          const Icon = item.icon
+          const value = displayValue(context, item.key)
+          return (
+            <div key={item.key} className={value ? 'checklist-step done' : 'checklist-step'}>
+              <span className="step-status">{value ? <Check size={16} /> : null}</span>
+              <div>
+                <span className="step-label">
+                  <Icon size={15} />
+                  {item.label}
+                </span>
+                <strong>{value || item.empty}</strong>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+function ChatBubble({
+  message,
+}: {
+  message: ChatMessage
+}) {
+  return (
+    <div className={`layla-message ${message.role}`}>
+      <div className="layla-message-stack">
+        <div className="layla-bubble">{message.content}</div>
+        {message.role === 'user' ? (
+          <button type="button" className="copy-message" aria-label="Copy message">
+            <Copy size={15} />
+          </button>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function StickyComposer({
+  input,
+  setInput,
+  onSubmit,
+  disabled,
+  home = false,
+}: {
+  input: string
+  setInput: (value: string) => void
+  onSubmit: () => void
+  disabled?: boolean
+  home?: boolean
+}) {
+  return (
+    <div className={home ? 'layla-composer-v2 home' : 'layla-composer-v2'}>
+      <textarea
+        value={input}
+        onChange={(event) => setInput(event.target.value)}
+        placeholder={home ? 'i want to plan a trip to johor bahru' : 'Ask anything...'}
+        aria-label="Ask Layla anything"
+        rows={home ? 4 : 1}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) onSubmit()
+        }}
+      />
+      <div className="layla-composer-actions">
+        <button type="button" aria-label="Attach inspiration">
+          <Paperclip size={19} />
+        </button>
+        {!home ? (
+          <button type="button" aria-label="Pick dates">
+            <Calendar size={19} />
+          </button>
+        ) : null}
+        <button type="button" aria-label="Use voice">
+          <Mic size={19} />
+        </button>
+        <button type="button" className="layla-send" aria-label="Send message" onClick={onSubmit} disabled={disabled || !input.trim()}>
+          {home ? <Send size={20} /> : <ArrowUp size={20} />}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function HomePrompt({
+  input,
+  setInput,
+  onStart,
+}: {
+  input: string
+  setInput: (value: string) => void
+  onStart: (value?: string) => void
+}) {
+  return (
+    <div className="layla-home-screen">
+      <div className="layla-home-hero">
+        <div className="travel-clover" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+          <span />
+        </div>
+        <h1>Your trip. Planned in minutes.</h1>
+        <StickyComposer input={input} setInput={setInput} onSubmit={() => onStart()} home />
+        <div className="home-quick-chips">
+          <button type="button" onClick={() => onStart(input || 'i want to plan a trip to johor bahru')}>
+            Create a new trip
+          </button>
+          <button type="button" onClick={() => onStart('inspire me where to go for a quick budget weekend from Singapore')}>
+            Inspire me where to go
+          </button>
+        </div>
+        <a href="#layla-help" className="see-help">
+          See how I can help you
+          <ArrowDown size={18} />
+        </a>
+      </div>
+
+      <section id="layla-help" className="layla-help-section" aria-label="How Layla helps">
+        <h2>From idea to itinerary</h2>
+        <p>I guide you through five quick decisions, then turn the answers into a trip card.</p>
+        <div className="help-steps">
+          {checklist.map((item, index) => {
+            const Icon = item.icon
+            return (
+              <div key={item.key} className="help-step">
+                <span>{index + 1}</span>
+                <Icon size={18} />
+                <strong>{item.label}</strong>
+              </div>
+            )
+          })}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function GenerationScreen({
+  context,
+  lastTrip,
+  isPending,
+  onOpenTrip,
+}: {
+  context: TripContext
+  lastTrip: TripDetail | null
+  isPending: boolean
+  onOpenTrip: () => void
+}) {
+  return (
+    <section className="layla-generation-screen">
+      <h1>{displayValue(context, 'whereTo') || 'Johor Bahru'} Budget Trip</h1>
+      <div className="generation-card-stack" aria-hidden="true">
+        <span className="gen-card card-one" />
+        <span className="gen-card card-two" />
+        <span className="gen-card card-three" />
+        <span className="gen-card card-four" />
+      </div>
+      <div className="generation-steps-v2">
+        {generationSteps.map((step, index) => {
+          const done = lastTrip || index < 3
+          const pending = !lastTrip && index >= 3
+          return (
+            <div key={step} className={pending ? 'generation-row pending' : 'generation-row done'}>
+              {done ? <Check size={18} /> : <Circle size={18} />}
+              <span>{step}</span>
+            </div>
+          )
+        })}
+      </div>
+      {lastTrip ? (
+        <button type="button" className="generation-open-trip" onClick={onOpenTrip}>
+          Open full trip card
+        </button>
+      ) : (
+        <div className="generation-loading">
+          <Loader2 size={18} className={isPending ? 'spin' : ''} />
+          Building your itinerary
+        </div>
+      )}
+    </section>
+  )
 }
 
 export function PlannerPanel({ compact = false }: { compact?: boolean }) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const [context, setContext] = useState<TripContext>(initialContext)
-  const [activeField, setActiveField] = useState<FieldKey>('whereTo')
+  const consumedPendingPrompt = useRef(false)
+  const chatScrollRef = useRef<HTMLDivElement | null>(null)
+  const [homeInput, setHomeInput] = useState('i want to plan a trip to johor bahru')
   const [input, setInput] = useState('')
+  const [context, setContext] = useState<TripContext>(emptyContext)
+  const [activeField, setActiveField] = useState<FieldKey>('whereTo')
   const [stage, setStage] = useState<Stage>('collecting')
+  const [checklistExpanded, setChecklistExpanded] = useState(false)
   const [lastTrip, setLastTrip] = useState<TripDetail | null>(null)
-  const [agentMode, setAgentMode] = useState<'model' | 'fallback' | null>(null)
   const [toolTrace, setToolTrace] = useState<AgentTrace[]>([])
-  const [showTripTools, setShowTripTools] = useState(false)
-  const [showIdeas, setShowIdeas] = useState(false)
-  const [dynamicSuggestions, setDynamicSuggestions] = useState<string[]>([])
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: nextId(),
-      role: 'assistant',
-      content:
-        "Tell me the trip you want. I'll ask only what is missing and turn it into a plan when you're ready.",
-      meta: 'Layla-style planner',
-    },
-  ])
+  const [messages, setMessages] = useState<ChatMessage[]>([])
 
   const progress = capturedCount(context)
-  const missing = nextMissingField(context)
-  const activeSuggestions = fieldSuggestions[activeField]
-  const currentBrief = briefSummary(context, missing)
+  const latestAssistantWithSuggestions = useMemo(() => {
+    return [...messages].reverse().find((message) => message.role === 'assistant' && message.suggestions?.length)
+  }, [messages])
+  const latestSuggestions = useMemo(() => {
+    return latestAssistantWithSuggestions?.suggestions ?? fieldSuggestions[activeField]
+  }, [activeField, latestAssistantWithSuggestions])
 
   const runAgent = useMutation({
     mutationFn: (payload: { prompt: string; context: TripContext }) => api.agentPlan(payload),
-    onMutate: () => setStage('generating'),
     onSuccess: async (result) => {
       setLastTrip(result.trip)
-      setAgentMode(result.mode)
       setToolTrace(result.trace)
       setStage('ready')
-      setMessages((current) => [
-        ...current,
-        {
-          id: nextId(),
-          role: 'assistant',
-          content: result.assistantMessage,
-          meta: result.mode === 'model' ? 'AI agent complete' : 'Fallback agent complete',
-        },
-      ])
       await queryClient.invalidateQueries({ queryKey: ['trips'] })
       await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
     },
-    onError: () => setStage('collecting'),
-  })
-
-  const chatAgent = useMutation({
-    mutationFn: (payload: { message: string; context: TripContext; history: Array<{ role: 'user' | 'assistant'; content: string }> }) =>
-      api.agentChat(payload),
-    onSuccess: (result) => {
-      setAgentMode(result.mode)
-      setToolTrace(result.trace)
-      setDynamicSuggestions(result.suggestedReplies)
-      setActiveField(result.activeField)
-      setContext((current) => ({
-        ...current,
-        whereTo: result.contextPatch.whereTo || current.whereTo,
-        whereFrom: result.contextPatch.whereFrom || current.whereFrom,
-        who: result.contextPatch.who || current.who,
-        when: result.contextPatch.when || current.when,
-        intent: result.contextPatch.intent || current.intent,
-        budgetLevel: result.contextPatch.budgetLevel || current.budgetLevel,
-        pace: result.contextPatch.pace || current.pace,
-      }))
-      setMessages((current) => [
-        ...current,
-        {
-          id: nextId(),
-          role: 'assistant',
-          content: result.assistantMessage,
-          meta: result.mode === 'model' ? 'AI chat' : 'Fallback chat',
-          suggestions: compactSuggestions(result.suggestedReplies),
-          suggestionField: result.activeField,
-        },
-      ])
-    },
     onError: () => {
+      setStage('collecting')
       setMessages((current) => [
         ...current,
         {
           id: nextId(),
           role: 'assistant',
-          content: 'I could not reach the travel agent right now. Try again or use Finish to build with the fallback planner.',
-          meta: 'Agent unavailable',
+          content: 'I could not build the trip card right now. Your checklist is still saved here, so confirm again when you are ready.',
         },
       ])
     },
   })
 
-  const assistantHint = useMemo(() => {
-    if (!missing) return 'I have the essentials. Finish the trip now, or keep chatting to refine the style.'
-    const item = checklist.find((entry) => entry.key === missing)
-    return item ? `${item.label}: ${item.empty}.` : 'Keep going.'
-  }, [missing])
+  function startFromHome(value?: string) {
+    const prompt = (value ?? homeInput).trim() || 'i want to plan a trip to johor bahru'
+    window.sessionStorage.setItem('layla_pending_prompt', prompt)
+    navigate({ to: '/chat' })
+  }
 
-  function sendToAgent(userText: string, nextContext: TripContext) {
-    const history = messages.map((message) => ({ role: message.role, content: message.content }))
-    setMessages((current) => [...current, { id: nextId(), role: 'user', content: userText }])
-    setToolTrace([
-      {
-        name: 'queued_chat',
-        label: 'Queued AI chat',
-        status: 'complete',
-        result: 'Sending message and current trip context to the backend travel agent.',
-      },
-    ])
-    chatAgent.mutate({ message: userText, context: nextContext, history })
+  function resetChat() {
+    window.sessionStorage.removeItem('layla_pending_prompt')
+    setInput('')
+    setContext(emptyContext)
+    setActiveField('whereTo')
+    setStage('collecting')
+    setChecklistExpanded(false)
+    setLastTrip(null)
+    setToolTrace([])
+    setMessages([])
+  }
+
+  function addUserAndAssistant(userText: string, nextContext: TripContext, previousContext: TripContext) {
+    const assistant = assistantTurn(nextContext, previousContext, userText)
+    setMessages((current) => [...current, { id: nextId(), role: 'user', content: userText }, assistant])
+    const nextField = nextMissingField(nextContext)
+    setActiveField(nextField ?? assistant.suggestionField ?? 'intent')
+    const captured = capturedCount(nextContext)
+    if (captured === 4) setChecklistExpanded(true)
+    if (captured >= 5) setChecklistExpanded(false)
   }
 
   function submitMessage() {
     const trimmed = input.trim()
-    if (!trimmed) return
+    if (!trimmed || runAgent.isPending) return
+    if (progress >= 5 && isSummaryConfirmation(trimmed)) {
+      setInput('')
+      startGeneration(trimmed)
+      return
+    }
+    if (progress < 5 && isSummaryConfirmation(trimmed)) {
+      const missingField = nextMissingField(context) ?? activeField
+      const missingLabel = checklist.find((item) => item.key === missingField)?.label.toLowerCase() ?? 'the next detail'
+      setMessages((current) => [
+        ...current,
+        { id: nextId(), role: 'user', content: trimmed },
+        {
+          id: nextId(),
+          role: 'assistant',
+          content: `Almost there. Before I build the itinerary, I still need ${missingLabel}. Answer that and the checklist can move to the final summary.`,
+          suggestions: fieldSuggestions[missingField],
+          suggestionField: missingField,
+        },
+      ])
+      setActiveField(missingField)
+      setInput('')
+      return
+    }
+    const previousContext = context
     const nextContext = inferContextFromPrompt(trimmed, context)
     setContext(nextContext)
-    const nextField = nextMissingField(nextContext)
-    if (nextField) setActiveField(nextField)
-    sendToAgent(trimmed, nextContext)
+    addUserAndAssistant(trimmed, nextContext, previousContext)
     setInput('')
   }
 
-  function chooseSuggestion(value: string) {
-    const nextContext = applyFieldValue(context, activeField, value)
-    setContext(nextContext)
-    const nextField = nextMissingField(nextContext)
-    if (nextField) setActiveField(nextField)
-    sendToAgent(value, nextContext)
-  }
-
-  function chooseMessageSuggestion(value: string, field?: FieldKey) {
+  function chooseSuggestion(value: string, field?: FieldKey) {
     const selectedField = field ?? activeField
-    const nextContext = applyFieldValue(context, selectedField, value)
+    const previousContext = context
+    const withField = applyFieldValue(context, selectedField, value)
+    const nextContext = inferContextFromPrompt(value, withField)
     setContext(nextContext)
-    const nextField = nextMissingField(nextContext)
-    setActiveField(nextField ?? selectedField)
-    sendToAgent(value, nextContext)
+    addUserAndAssistant(value, nextContext, previousContext)
   }
 
-  function chooseQuickPrompt(prompt: string) {
-    const nextContext = inferContextFromPrompt(prompt, context)
-    setContext(nextContext)
-    const nextField = nextMissingField(nextContext)
-    if (nextField) setActiveField(nextField)
-    sendToAgent(prompt, nextContext)
-    setInput('')
+  function handleSummaryAction(value: string) {
+    if (value === 'Confirm summary') {
+      startGeneration(value)
+      return
+    }
+    if (value === 'Change dates') {
+      setActiveField('when')
+      setChecklistExpanded(false)
+      setMessages((current) => [
+        ...current,
+        {
+          id: nextId(),
+          role: 'assistant',
+          content: 'No problem. Tell me the better date window and I will update the trip brief before building it.',
+          suggestions: ['This weekend', 'Next weekend', 'May 29 - May 30'],
+          suggestionField: 'when',
+        },
+      ])
+      return
+    }
+    setActiveField('intent')
+    setChecklistExpanded(false)
+    setMessages((current) => [
+      ...current,
+      {
+        id: nextId(),
+        role: 'assistant',
+        content: 'Add the vibe you want and I will fold it into the itinerary brief before generation.',
+        suggestions: ['Cafe hopping', 'Local food', 'Relaxing activities'],
+        suggestionField: 'intent',
+      },
+    ])
   }
 
-  function selectCandidate(destination: string) {
-    const nextContext = { ...context, whereTo: destination }
-    setContext(nextContext)
-    const nextField = nextMissingField(nextContext)
-    if (nextField) setActiveField(nextField)
-    sendToAgent(destination, nextContext)
-  }
-
-  function finishTrip() {
-    const inferredContext = input.trim() ? inferContextFromPrompt(input, context) : context
-    setContext(inferredContext)
-    const nextField = nextMissingField(inferredContext)
-    if (nextField) setActiveField(nextField)
-    const prompt = composePrompt(inferredContext, input)
+  function startGeneration(userText?: string) {
+    const finalContext = context.whereFrom ? context : { ...context, whereFrom: 'Singapore' }
+    setContext(finalContext)
+    setChecklistExpanded(false)
+    if (userText) {
+      setMessages((current) => [...current, { id: nextId(), role: 'user', content: userText }])
+    }
+    setStage('generating')
     setToolTrace([
       {
-        name: 'queued',
-        label: 'Queued agent run',
+        name: 'trip_brief',
+        label: 'Build itinerary brief',
         status: 'complete',
-        result: 'Preparing trip context for the backend travel agent.',
+        result: summaryPrompt(finalContext).join('; '),
       },
     ])
     runAgent.mutate({
-      prompt,
-      context: inferredContext,
+      prompt: composePlanPrompt(finalContext),
+      context: finalContext,
     })
   }
 
+  useEffect(() => {
+    if (compact || consumedPendingPrompt.current) return
+    const pendingPrompt = window.sessionStorage.getItem('layla_pending_prompt')
+    if (!pendingPrompt) return
+    consumedPendingPrompt.current = true
+    window.sessionStorage.removeItem('layla_pending_prompt')
+    const nextContext = inferContextFromPrompt(pendingPrompt, emptyContext)
+    setContext(nextContext)
+    addUserAndAssistant(pendingPrompt, nextContext, emptyContext)
+  }, [compact])
+
+  useEffect(() => {
+    if (checklistExpanded) return
+    const frame = window.requestAnimationFrame(() => {
+      const scrollNode = chatScrollRef.current
+      if (!scrollNode) return
+      scrollNode.scrollTo({ top: scrollNode.scrollHeight, behavior: 'auto' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [checklistExpanded, messages.length])
+
+  if (compact) {
+    return (
+      <section className="layla-v2-route home-route">
+        <div className="layla-phone-frame home">
+          <LaylaTopBar onNewTrip={() => setHomeInput('')} />
+          <HomePrompt input={homeInput} setInput={setHomeInput} onStart={startFromHome} />
+        </div>
+      </section>
+    )
+  }
+
   return (
-    <section className={compact ? 'planner-panel smart minimal compact' : 'planner-panel smart minimal'}>
-      <div className="planner-toolbar compact-planner-toolbar">
-        <div>
-          <span className="mini-label">AI travel planner</span>
-          <h2>Plan by chat</h2>
-          <p>{currentBrief}</p>
-        </div>
-        <span className="live-dot">{progress}/5</span>
-      </div>
-
-      <div className="brief-bar">
-        <button type="button" className="brief-status" onClick={() => setShowTripTools((value) => !value)}>
-          <span>{missing ? `Next: ${checklist.find((item) => item.key === missing)?.label}` : 'Ready to finish'}</span>
-          <strong>{currentBrief}</strong>
-        </button>
-        <div className="minimal-actions">
-          <button type="button" className="icon-action" aria-label="Show trip ideas" title="Ideas" onClick={() => setShowIdeas((value) => !value)}>
-            <Sparkles size={15} />
-            <span>Ideas</span>
-          </button>
-          <button
-            type="button"
-            className="icon-action"
-            aria-label="Edit trip details"
-            title="Details"
-            onClick={() => setShowTripTools((value) => !value)}
-          >
-            <Compass size={15} />
-            <span>Details</span>
-          </button>
-          <button type="button" className="primary-action small" onClick={finishTrip} disabled={runAgent.isPending}>
-            {runAgent.isPending ? <Loader2 size={15} className="spin" /> : <Bot size={15} />}
-            Finish
-          </button>
-        </div>
-      </div>
-
-      {showTripTools ? (
-        <div className="minimal-drawer">
-          <div className="drawer-section">
-            <span className="mini-label">Trip details</span>
-            <div className="context-strip drawer-context" aria-label="Trip essentials">
-              {checklist.map((item) => {
-                const Icon = item.icon
-                const value = valueForField(context, item.key)
-                const active = activeField === item.key
-                return (
-                  <button
-                    key={item.key}
-                    type="button"
-                    className={active ? 'context-chip active' : 'context-chip'}
-                    onClick={() => setActiveField(item.key)}
-                  >
-                    {value ? <CheckCircle2 size={14} /> : <Circle size={14} />}
-                    <Icon size={15} aria-hidden="true" />
-                    <span>{value || item.label}</span>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-          <div className="drawer-section">
-            <span className="mini-label">Answer faster</span>
-            <strong>{checklist.find((item) => item.key === activeField)?.label}</strong>
-            <div className="suggestion-chips">
-              {(dynamicSuggestions.length > 0 ? dynamicSuggestions : activeSuggestions).map((suggestion) => (
-                <button key={suggestion} type="button" onClick={() => chooseSuggestion(suggestion)}>
-                  {suggestion}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="planner-settings compact-settings">
-            <label>
-              Budget
-              <select
-                value={context.budgetLevel}
-                onChange={(event) => setContext((current) => ({ ...current, budgetLevel: event.target.value }))}
-              >
-                <option value="budget">Budget</option>
-                <option value="mid">Mid</option>
-                <option value="premium">Premium</option>
-              </select>
-            </label>
-            <label>
-              Pace
-              <select value={context.pace} onChange={(event) => setContext((current) => ({ ...current, pace: event.target.value }))}>
-                <option value="slow">Slow</option>
-                <option value="balanced">Balanced</option>
-                <option value="fast">Fast</option>
-              </select>
-            </label>
-          </div>
-          <p>{assistantHint}</p>
-        </div>
-      ) : null}
-
-      {showIdeas ? (
-        <div className="ideas-panel">
-          <div className="quick-prompt-row" aria-label="Quick start prompts">
-            <span>Try</span>
-            {quickPrompts.map((prompt) => (
-              <button key={prompt} type="button" onClick={() => chooseQuickPrompt(prompt)}>
-                {prompt}
-              </button>
-            ))}
-          </div>
-          {!context.whereTo ? (
-            <div className="destination-candidates minimal-candidates">
-              {destinationCards.map((candidate) => (
-                <button key={candidate.name} type="button" onClick={() => selectCandidate(candidate.name)}>
-                  <img src={candidate.image} alt="" />
-                  <strong>{candidate.name}</strong>
-                  <span>{candidate.detail}</span>
-                  <small>{candidate.price}</small>
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      <div className="chat-console minimal-chat">
-        <div className="chat-window smart-window">
-          {messages.map((message) => (
-            <div key={message.id} className={`chat-row ${message.role}`}>
-              {message.role === 'assistant' ? <span className="avatar">AI</span> : null}
-              <div className="chat-message-stack">
-                <div className="chat-bubble">
-                  {message.meta ? <span className="bubble-meta">{message.meta}</span> : null}
-                  {message.content}
-                </div>
-                {message.role === 'assistant' && message.suggestions?.length ? (
-                  <div className="reply-suggestions" aria-label="AI suggestions">
-                    {message.suggestions.map((suggestion) => (
-                      <button
-                        key={`${message.id}-${suggestion}`}
-                        type="button"
-                        onClick={() => chooseMessageSuggestion(suggestion, message.suggestionField)}
-                        disabled={chatAgent.isPending}
-                      >
-                        {suggestion}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            </div>
-          ))}
-
-          {chatAgent.isPending ? (
-            <div className="planning-progress compact-generation">
-              <Loader2 size={18} className="spin" aria-hidden="true" />
-              <div>
-                <strong>Thinking with AI...</strong>
-                <span>Reading your message, updating trip essentials, and choosing the next best question.</span>
-              </div>
-            </div>
-          ) : null}
-
-          {stage === 'generating' || runAgent.isPending ? (
-            <div className="generation-stack compact-generation">
-              {(toolTrace.length > 0 ? toolTrace.map((item) => item.label) : generationSteps).map((step, index) => (
-                <div key={step} className="generation-step">
-                  {index === 0 ? <Loader2 size={16} className="spin" /> : <Wand2 size={16} />}
-                  <span>{step}</span>
-                </div>
-              ))}
-            </div>
-          ) : null}
-
-          {toolTrace.length > 0 && stage !== 'generating' ? (
-            <details className="agent-trace minimal-trace">
-              <summary>
-                <strong>{agentMode === 'model' ? 'OpenAI agent run' : 'Local fallback agent run'}</strong>
-                <span>{toolTrace.length} tools</span>
-              </summary>
-              {toolTrace.map((item) => (
-                <div key={`${item.name}-${item.label}`} className={`agent-trace-row ${item.status}`}>
-                  <CheckCircle2 size={15} />
-                  <div>
-                    <strong>{item.label}</strong>
-                    <span>{item.result}</span>
-                  </div>
-                </div>
-              ))}
-            </details>
-          ) : null}
-
-          {lastTrip ? (
-            <div className="generated-card rich-result">
-              <img src={lastTrip.heroImageUrl} alt="" />
-              <div>
-                <span>Your trip is ready</span>
-                <strong>{lastTrip.title}</strong>
-                <p>{lastTrip.summary}</p>
-                <button
-                  type="button"
-                  className="primary-action small"
-                  onClick={() => navigate({ to: '/trips/$tripId', params: { tripId: lastTrip.id } })}
-                >
-                  Open itinerary
-                </button>
-              </div>
-            </div>
-          ) : null}
-        </div>
-
-        <div className="composer">
-          <textarea
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            aria-label="Ask Layla anything"
-            placeholder="Ask anything..."
-            rows={compact ? 2 : 3}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) submitMessage()
+    <section className="layla-v2-route chat">
+      <div className="layla-phone-frame chat">
+        <LaylaTopBar onNewTrip={resetChat} />
+        {stage === 'generating' || stage === 'ready' ? (
+          <GenerationScreen
+            context={context}
+            lastTrip={lastTrip}
+            isPending={runAgent.isPending}
+            onOpenTrip={() => {
+              if (lastTrip) navigate({ to: '/trips/$tripId', params: { tripId: lastTrip.id } })
             }}
           />
-          <div className="composer-actions">
-            <button type="button" aria-label="Attach inspiration">
-              <Paperclip size={17} />
-            </button>
-            <button type="button" aria-label="Use voice input">
-              <Mic size={17} />
-            </button>
-            <button
-              type="button"
-              aria-label="Open trip details"
-              onClick={() => {
-                setActiveField('when')
-                setShowTripTools(true)
-              }}
-            >
-              <Calendar size={17} />
-            </button>
-            <button type="button" className="send-action" aria-label="Send message" onClick={submitMessage} disabled={!input.trim() || chatAgent.isPending}>
-              <Send size={17} />
-            </button>
+        ) : (
+          <div className="layla-chat-screen">
+            <TripChecklistBar context={context} expanded={checklistExpanded} onToggle={() => setChecklistExpanded((value) => !value)} />
+            {checklistExpanded ? <TripChecklistSheet context={context} /> : null}
+
+            <div className="layla-chat-scroll" ref={chatScrollRef}>
+              {messages.length === 0 ? (
+                <div className="layla-empty-chat">
+                  <CheckCircle2 size={20} />
+                  <strong>Tell me the trip you want.</strong>
+                  <span>I will guide you through five quick decisions and build the itinerary from there.</span>
+                </div>
+              ) : null}
+              {messages.map((message) => (
+                <ChatBubble key={message.id} message={message} />
+              ))}
+              {toolTrace.length > 0 ? <span className="sr-only">{toolTrace.length} agent steps queued</span> : null}
+            </div>
+
+            <div className="layla-chat-footer">
+              {latestSuggestions.length > 0 ? (
+                <div className="layla-footer-chips">
+                  {latestSuggestions.map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      type="button"
+                      onClick={() =>
+                        latestAssistantWithSuggestions?.summaryActions
+                          ? handleSummaryAction(suggestion)
+                          : chooseSuggestion(suggestion, latestAssistantWithSuggestions?.suggestionField ?? activeField)
+                      }
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <StickyComposer input={input} setInput={setInput} onSubmit={submitMessage} disabled={runAgent.isPending} />
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </section>
   )

@@ -15,6 +15,8 @@ const fallbackImages: Record<string, string> = {
   Tokyo:
     'https://images.unsplash.com/photo-1503899036084-c55cdd92da26?auto=format&fit=crop&w=1200&q=80',
   Bali: 'https://images.unsplash.com/photo-1518548419970-58e3b4079ab2?auto=format&fit=crop&w=1200&q=80',
+  'Johor Bahru':
+    'https://images.unsplash.com/photo-1596422846543-75c6fc197f07?auto=format&fit=crop&w=1200&q=80',
   Seoul: 'https://images.unsplash.com/photo-1506816561089-5cc37b3aa9b0?auto=format&fit=crop&w=1200&q=80',
   Queenstown:
     'https://images.unsplash.com/photo-1507699622108-4be3abd695ad?auto=format&fit=crop&w=1200&q=80',
@@ -29,6 +31,9 @@ function pickDestination(prompt: string, budgetLevel: string) {
   const direct = destinations.find((destination) => lower.includes(destination.name.toLowerCase()))
   if (direct) return direct
 
+  if (lower.includes('johor') || lower.includes('bahru') || lower.includes('jb')) {
+    return destinations.find((destination) => destination.id === 'dest_johor_bahru') ?? destinations[0]
+  }
   if (lower.includes('japan') || lower.includes('food') || lower.includes('culture')) {
     return destinations.find((destination) => destination.id === 'dest_tokyo') ?? destinations[0]
   }
@@ -67,6 +72,10 @@ function itineraryFor(destination: string, pace: string) {
       ['Ubud nature and spa', 'Rice terraces, massage block, and a quiet evening.'],
       ['Surf or waterfall choice', 'Choose between active water time or inland nature.'],
     ],
+    'Johor Bahru': [
+      ['Arrival and Exploring Historic Johor Bahru', 'Cross from Singapore, settle in, then keep the first day focused on cafes and old-town wandering.'],
+      ['Cafe Hopping and Downtown Fun', 'A relaxed second day with local food, low-cost activities, and a simple return to Singapore.'],
+    ],
     Seoul: [
       ['Myeongdong base and snacks', 'Central check-in and low-risk night food.'],
       ['Palace, market, Hongdae', 'Culture and food by day, energy by night.'],
@@ -102,13 +111,16 @@ export function createGeneratedTrip(input: CreateTripInput) {
   const travelerType = input.travelerType ?? 'couple'
   const pace = input.pace ?? 'balanced'
   const origin = input.origin || 'Singapore'
-  const startDate = input.startDate || '2026-08-14'
-  const endDate = input.endDate || dateAfter(startDate, 5)
   const destination = pickDestination(input.prompt, budgetLevel)
+  const isJohorBahru = destination.name === 'Johor Bahru'
+  const startDate = input.startDate || (isJohorBahru ? '2026-05-29' : '2026-08-14')
+  const endDate = input.endDate || (isJohorBahru ? '2026-05-30' : dateAfter(startDate, 5))
   const tripId = id('trip')
   const now = new Date().toISOString()
-  const title = `${destination.name} ${travelerType} plan`
-  const estimatedCost = destination.flightPriceFrom * 2 + (budgetLevel === 'premium' ? 2200 : budgetLevel === 'budget' ? 760 : 1450)
+  const title = isJohorBahru ? '2-Day Solo Johor Bahru Budget Escape' : `${destination.name} ${travelerType} plan`
+  const estimatedCost = isJohorBahru
+    ? 168
+    : destination.flightPriceFrom * 2 + (budgetLevel === 'premium' ? 2200 : budgetLevel === 'budget' ? 760 : 1450)
   const summary = `Built from your prompt: "${input.prompt}". This ${pace} ${travelerType} trip uses ${destination.name} as the best-fit destination because it matches ${destination.vibe}. Booking cards are simulated demo offers; verify live prices before purchase.`
 
   db.prepare(
