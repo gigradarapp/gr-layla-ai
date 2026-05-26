@@ -39,6 +39,7 @@ const agentChatSchema = z.object({
       }),
     )
     .optional(),
+  focusField: z.enum(['whereTo', 'whereFrom', 'who', 'when', 'intent']).optional(),
   moreSuggestions: z
     .object({
       field: z.enum(['whereTo', 'whereFrom', 'who', 'when', 'intent']),

@@ -86,6 +86,7 @@ export const api = {
       pace?: string
     }
     history: Array<{ role: 'user' | 'assistant'; content: string }>
+    focusField?: 'whereTo' | 'whereFrom' | 'who' | 'when' | 'intent'
     moreSuggestions?: {
       field: 'whereTo' | 'whereFrom' | 'who' | 'when' | 'intent'
       exclude: string[]

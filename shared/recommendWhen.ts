@@ -72,3 +72,61 @@ export function recommendWhenWindows(context: WhenRecommendationContext): string
 
   return [weekendRange(0), weekendRange(1), weekBlock(0, 5)]
 }
+
+const MONTH_ALIASES: Record<string, string> = {
+  jan: 'jan',
+  january: 'jan',
+  feb: 'feb',
+  february: 'feb',
+  mar: 'mar',
+  march: 'mar',
+  apr: 'apr',
+  april: 'apr',
+  may: 'may',
+  jun: 'jun',
+  june: 'jun',
+  jul: 'jul',
+  july: 'jul',
+  aug: 'aug',
+  august: 'aug',
+  sep: 'sep',
+  sept: 'sep',
+  september: 'sep',
+  oct: 'oct',
+  october: 'oct',
+  nov: 'nov',
+  november: 'nov',
+  dec: 'dec',
+  december: 'dec',
+}
+
+function monthTokenFromPreference(preference: string) {
+  const match = preference.toLowerCase().match(/\bin\s+([a-z]+)\b/)
+  if (!match) return null
+  return MONTH_ALIASES[match[1]] ?? null
+}
+
+/** Narrow date pills after a vague timing hint (e.g. "This weekend" → Sat–Sun windows). */
+export function recommendWhenWindowsForPreference(preference: string | undefined, context: WhenRecommendationContext): string[] {
+  const windows = recommendWhenWindows(context)
+  const trimmed = preference?.trim() ?? ''
+  if (!trimmed) return windows
+
+  const lower = trimmed.toLowerCase()
+  if (/^this weekend$/i.test(trimmed)) {
+    const dayTrip = weekendRange(0).replace(/ – .+$/, ' (day trip)')
+    return [weekendRange(0), weekendRange(1), dayTrip]
+  }
+  if (/^next weekend$/i.test(trimmed)) {
+    return [weekendRange(1), weekendRange(2), weekendRange(0)]
+  }
+
+  const monthToken = monthTokenFromPreference(trimmed)
+  if (monthToken) {
+    const inMonth = windows.filter((window) => new RegExp(`\\b${monthToken}\\b`, 'i').test(window))
+    if (inMonth.length >= 2) return inMonth.slice(0, 4)
+    if (inMonth.length === 1) return [...inMonth, ...windows.filter((window) => !inMonth.includes(window))].slice(0, 4)
+  }
+
+  return windows
+}

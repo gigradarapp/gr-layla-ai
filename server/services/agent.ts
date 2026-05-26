@@ -1,4 +1,27 @@
-import { recommendWhenWindows } from '../../shared/recommendWhen.js'
+import {
+  canFocusField,
+  currentRequiredField,
+  departurePrerequisitesMet,
+  gateContextPatch,
+  inferFieldFromValue,
+  isDateRefinementRequest,
+  isActivityPickMessage,
+  isTripConfirmationMessage,
+  isValidCapturedValue,
+  normalizeDateWindow,
+  preserveValidatedChecklistFields,
+  looksLikeDateWindow,
+  looksLikeOriginAnswer,
+  looksLikeVagueDateHint,
+  looksLikeWhoAnswer,
+  mentionsDifferentDestination,
+  resolveFocusField,
+  sanitizeChecklistContext,
+  suggestFieldForReplies,
+} from '../../shared/checklistFocus.js'
+import { conversationPhase } from '../../shared/chatIntent.js'
+import { inferDefaultOrigin } from '../../shared/inferredOrigin.js'
+import { recommendWhenWindows, recommendWhenWindowsForPreference } from '../../shared/recommendWhen.js'
 import { db, id } from '../db/sqlite.js'
 import { createGeneratedTrip } from './planner.js'
 import { getTripDetail } from './tripDetail.js'
@@ -27,6 +50,7 @@ type AgentChatRequest = {
   message: string
   context?: AgentContext
   history?: Array<{ role: 'user' | 'assistant'; content: string }>
+  focusField?: AgentChatTurn['activeField']
   moreSuggestions?: MoreSuggestionsRequest
 }
 
@@ -42,10 +66,15 @@ type AgentPlan = {
   confidence: number
 }
 
+type ChatMessageIntent = 'checklist_step' | 'add_activity' | 'confirm_trip' | 'change_checklist' | 'clarify'
+
 type AgentChatTurn = {
   assistantMessage: string
   contextPatch: Required<AgentContext>
   activeField: 'whereTo' | 'whereFrom' | 'who' | 'when' | 'intent'
+  suggestionField: 'whereTo' | 'whereFrom' | 'who' | 'when' | 'intent'
+  messageIntent: ChatMessageIntent
+  addActivities: string[]
   suggestedReplies: string[]
   shouldFinish: boolean
   confidence: number
@@ -164,13 +193,19 @@ function inferPatch(message: string, current: AgentContext = {}): Required<Agent
     pace: '',
   }
 
-  if (lower.includes('japan') || lower.includes('tokyo') || lower.includes('kyoto')) patch.whereTo = 'Tokyo + Kyoto'
-  if (lower.includes('johor') || lower.includes('bahru') || lower.includes('jb')) patch.whereTo = 'Johor Bahru'
-  if (lower.includes('bali')) patch.whereTo = 'Bali'
+  if (!current.whereTo?.trim()) {
+    if (lower.includes('japan') || lower.includes('tokyo') || lower.includes('kyoto')) patch.whereTo = 'Tokyo + Kyoto'
+    if (lower.includes('johor') || lower.includes('bahru') || lower.includes('jb')) patch.whereTo = 'Johor Bahru'
+    if (lower.includes('bali')) patch.whereTo = 'Bali'
+  }
   if (lower.includes('seoul') || lower.includes('korea')) patch.whereTo = 'Seoul'
   if (lower.includes('queenstown') || lower.includes('new zealand') || lower.includes('road trip')) patch.whereTo = 'Queenstown'
   if (lower.includes('lisbon') || lower.includes('portugal')) patch.whereTo = 'Lisbon'
-  if (lower.includes('singapore')) patch.whereFrom = 'Singapore'
+  if (/\bfrom\s+singapore\b/i.test(lower) || (current.whereTo?.trim() && lower.includes('singapore') && !lower.includes('johor'))) {
+    patch.whereFrom = 'Singapore'
+  }
+  if (/\bfrom\s+kuala lumpur\b/i.test(lower) || /\bfrom\s+kl\b/i.test(lower)) patch.whereFrom = 'Kuala Lumpur'
+  if (/\bfrom\s+bangkok\b/i.test(lower)) patch.whereFrom = 'Bangkok'
   if (lower.includes('budget') || lower.includes('cheap')) patch.budgetLevel = 'budget'
   if (lower.includes('mid')) patch.budgetLevel = 'mid'
   if (lower.includes('premium') || lower.includes('luxury')) patch.budgetLevel = 'premium'
@@ -182,22 +217,10 @@ function inferPatch(message: string, current: AgentContext = {}): Required<Agent
   if (lower.includes('balanced')) patch.pace = 'balanced'
   if (lower.includes('fast') || lower.includes('crazy') || lower.includes('adventure')) patch.pace = 'fast'
   const trimmedMessage = message.trim()
-  if (
-    /\b(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\s+\d{1,2}\s+[a-z]{3,}/i.test(trimmedMessage) ||
-    /\d{1,2}\s+[a-z]{3,}\s*(?:[–—-]\s*|\s+to\s+)/i.test(trimmedMessage)
-  ) {
-    patch.when = trimmedMessage.length <= 56 ? trimmedMessage : trimmedMessage.slice(0, 56)
-  } else if (/sat[^\w]*sun|sat\s*[–-]\s*sun|saturday.*sunday/i.test(message)) {
-    patch.when = message.trim().length <= 42 ? message.trim() : 'Sat–Sun (this weekend)'
-  } else if (lower.includes('sun-mon') || lower.includes('sun mon')) {
-    patch.when = 'Sun–Mon'
-  } else if (lower.includes('this month')) patch.when = 'This month'
-  else if (lower.includes('next month')) patch.when = 'Next month'
-  else if (lower.includes('last-minute') || lower.includes('weekend')) {
-    patch.when = lower.includes('overnight') ? 'This weekend or next weekend, overnight stay' : 'This weekend or next weekend'
+  if (!isDateRefinementRequest(trimmedMessage)) {
+    const normalizedWhen = normalizeDateWindow(trimmedMessage)
+    if (normalizedWhen) patch.when = normalizedWhen
   }
-  if (lower.includes('overnight') && !patch.when) patch.when = 'Overnight stay'
-  if (lower.includes('5-day') || lower.includes('5 day')) patch.when = '5 days'
   if (lower.includes('food')) patch.intent = 'Food and culture'
   if (lower.includes('nature') || lower.includes('adventure')) patch.intent = 'Nature adventure'
   if (lower.includes('wellness') || lower.includes('beach')) patch.intent = 'Wellness and beach'
@@ -205,9 +228,6 @@ function inferPatch(message: string, current: AgentContext = {}): Required<Agent
   if (lower.includes('relax') || lower.includes('local activit') || lower.includes('cafe')) patch.intent = 'Relaxation and local activities'
 
   if (!patch.whereFrom && current.whereFrom) patch.whereFrom = current.whereFrom
-  if (!patch.whereFrom && (current.whereTo?.toLowerCase().includes('johor') || patch.whereTo.toLowerCase().includes('johor')) && (patch.who || current.who) && (patch.when || current.when)) {
-    patch.whereFrom = 'Singapore'
-  }
   if (!patch.budgetLevel && current.budgetLevel) patch.budgetLevel = current.budgetLevel
   if (!patch.pace && current.pace) patch.pace = current.pace
   return patch
@@ -228,29 +248,84 @@ function mergedContext(context: AgentContext = {}, patch: AgentContext = {}) {
 const captureOrder: Array<keyof AgentContext> = ['whereTo', 'when', 'who', 'intent', 'whereFrom']
 
 function capturedFields(context: Required<AgentContext>) {
-  return captureOrder.filter((key) => Boolean(context[key]))
+  return captureOrder.filter((key) => isValidCapturedValue(key, context[key]))
 }
 
 function missingFields(context: Required<AgentContext>) {
   return captureOrder.filter((key) => !context[key])
 }
 
-function nextField(context: Required<AgentContext>): AgentChatTurn['activeField'] {
-  const missing = missingFields(context)
-  return (missing[0] as AgentChatTurn['activeField'] | undefined) ?? 'whereFrom'
+function coalesceField(...values: Array<string | undefined>) {
+  for (const value of values) {
+    if (value?.trim()) return value.trim()
+  }
+  return ''
 }
 
-function combineContextPatch(message: string, current: AgentContext = {}, modelPatch: AgentContext = {}) {
-  const inferred = inferPatch(message, current)
-  return {
-    whereTo: modelPatch.whereTo || inferred.whereTo,
-    whereFrom: modelPatch.whereFrom || inferred.whereFrom,
-    who: modelPatch.who || inferred.who,
-    when: modelPatch.when || inferred.when,
-    intent: modelPatch.intent || inferred.intent,
-    budgetLevel: modelPatch.budgetLevel || inferred.budgetLevel,
-    pace: modelPatch.pace || inferred.pace,
+function coalesceWhenField(...values: Array<string | undefined>) {
+  for (const value of values) {
+    const normalized = value ? normalizeDateWindow(value) : ''
+    if (normalized) return normalized
   }
+  return ''
+}
+
+function combineContextPatch(
+  message: string,
+  current: AgentContext = {},
+  modelPatch: AgentContext = {},
+  options?: { skipWhenInfer?: boolean },
+) {
+  const inferred = inferPatch(message, current)
+  const refiningDates = options?.skipWhenInfer ?? isDateRefinementRequest(message)
+  const explicitDate = looksLikeDateWindow(message.trim())
+
+  let safeModelPatch = { ...modelPatch }
+  if (current.whereTo?.trim() && modelPatch.whereTo && mentionsDifferentDestination(message, current.whereTo)) {
+    safeModelPatch.whereTo = ''
+  }
+  if (safeModelPatch.who && (looksLikeDateWindow(safeModelPatch.who) || looksLikeVagueDateHint(safeModelPatch.who))) {
+    if (!coalesceWhenField(safeModelPatch.when, current.when)) safeModelPatch.when = safeModelPatch.who
+    safeModelPatch.who = ''
+  }
+  if (safeModelPatch.when) {
+    const normalizedModelWhen = normalizeDateWindow(safeModelPatch.when)
+    safeModelPatch.when = normalizedModelWhen || ''
+  }
+  if (safeModelPatch.whereFrom && !looksLikeOriginAnswer(safeModelPatch.whereFrom)) {
+    safeModelPatch.whereFrom = ''
+  }
+  if (safeModelPatch.when && inferFieldFromValue(safeModelPatch.when) === 'who') {
+    safeModelPatch.when = ''
+  }
+
+  const whenValue = refiningDates
+    ? coalesceWhenField(explicitDate ? safeModelPatch.when : undefined, explicitDate ? inferred.when : undefined, current.when)
+    : coalesceWhenField(safeModelPatch.when, inferred.when, current.when)
+
+  const interim = {
+    whereTo: current.whereTo?.trim() ? current.whereTo : coalesceField(safeModelPatch.whereTo, inferred.whereTo),
+    whereFrom: '',
+    who: coalesceField(safeModelPatch.who, inferred.who, current.who),
+    when: whenValue,
+    intent: coalesceField(safeModelPatch.intent, inferred.intent, current.intent),
+    budgetLevel: coalesceField(safeModelPatch.budgetLevel, inferred.budgetLevel, current.budgetLevel),
+    pace: coalesceField(safeModelPatch.pace, inferred.pace, current.pace),
+  }
+  const whereFromValue = coalesceField(safeModelPatch.whereFrom, inferred.whereFrom, current.whereFrom)
+
+  return gateContextPatch(
+    preserveValidatedChecklistFields(current, {
+      whereTo: interim.whereTo,
+      whereFrom: whereFromValue,
+      who: interim.who,
+      when: interim.when,
+      intent: interim.intent,
+      budgetLevel: interim.budgetLevel,
+      pace: interim.pace,
+    }),
+    current,
+  )
 }
 
 const fieldSuggestions: Record<Exclude<AgentChatTurn['activeField'], 'when'>, string[]> = {
@@ -260,30 +335,26 @@ const fieldSuggestions: Record<Exclude<AgentChatTurn['activeField'], 'when'>, st
   intent: ['Relaxation and local activities', 'Cafe hopping', 'Food and shopping'],
 }
 
-const LAYLA_CHAT_SYSTEM_PROMPT = `You are Layla, a warm concise AI travel-agent. Your job is to guide the user through a 5-step trip checklist before any full itinerary is built.
+const LAYLA_CHAT_SYSTEM_PROMPT = `You are Layla, a warm concise AI travel-agent. Infer what the user means from their message and the conversation phase — do not rely on keyword matching alone.
 
-Checklist order (always ask for the first missing item only):
-1. whereTo — destination
-2. when — travel dates
-3. who — who is travelling
-4. intent — what they want from the trip
-5. whereFrom — where they depart from
+Checklist order (when phase is checklist): whereTo → whereFrom → when → who → intent.
+- whereTo locks after capture. Vague when ("This weekend") is NOT captured — offer concrete Sat–Sun date pills until they pick real dates.
+- whereFrom: confirm suggestedOrigin or another city; only set contextPatch.whereFrom when they confirm.
+
+messageIntent (REQUIRED — classify the user's latest message):
+- checklist_step: answering the current checklist field (focusField).
+- add_activity: optional extra activity after essentials are captured (e.g. "night markets", "spa") — NOT departure city, NOT dates, NOT "good to go".
+- confirm_trip: user wants to build the trip ("good to go", "confirm", "let's go", "I'm good", "build it").
+- change_checklist: user wants to revise a captured field (e.g. change dates).
+- clarify: unclear or off-topic.
 
 Rules:
-- Use capturedFields and missingFields from the request. Never re-ask or re-clarify a field already in capturedFields.
-- Acknowledge what the user just said in one short beat, then ask a natural question for the next missing field only.
-- activeField must equal the first missing field.
-- suggestedReplies must be 2-4 pills for activeField ONLY. Never mix fields (e.g. never offer date pills when asking who).
-- when: suggestedReplies must be specific calendar windows with real dates (e.g. "Sat 31 May – Sun 1 Jun") tailored to whereTo, who, today, and destinationHint. Mention your top pick briefly in assistantMessage.
-- who: traveler-type pills only (e.g. Solo, Couple, Family with kids, Friends).
-- intent: vibe pills tailored to the destination and traveler type.
-- whereFrom: plausible origin cities for the trip.
-- whereTo: use destinationInventory when relevant.
-- Keep assistantMessage under 70 words, one short paragraph, no canned scripts, no bullet lists unless the user asked multiple things.
-- Update contextPatch from the latest user message. Use empty strings for unknown fields.
-- Set shouldFinish true only when all 5 checklist fields are captured.
-- Do not produce a full day-by-day itinerary in collection chat.
-- Never pretend live prices are guaranteed.`
+- activeField and suggestionField: what you are asking about NOW; pills must match suggestionField only.
+- addActivities: non-empty only when messageIntent is add_activity (labels to append).
+- contextPatch: only fields the user clearly provided this turn; empty string otherwise.
+- shouldFinish true when messageIntent is confirm_trip OR all 5 essentials are captured and user is done.
+- conversationPhase in the request tells you if they are still on checklist, picking activities, or at summary.
+- Keep assistantMessage under 70 words. No full itinerary in chat.`
 
 function resolveSuggestedReplies(
   merged: Required<AgentContext>,
@@ -291,16 +362,28 @@ function resolveSuggestedReplies(
   turn: AgentChatTurn,
   shouldFinish: boolean,
   preferModel = false,
+  userMessage = '',
 ) {
   if (shouldFinish) return []
 
-  if (preferModel && turn.suggestedReplies.length >= 2) {
-    return turn.suggestedReplies.slice(0, 4)
+  if (activeField === 'when') {
+    const concreteModelPills = turn.suggestedReplies.filter((item) => looksLikeDateWindow(item))
+    if (concreteModelPills.length >= 2) return concreteModelPills.slice(0, 4)
+    const preference = looksLikeVagueDateHint(userMessage) ? userMessage : undefined
+    return recommendWhenWindowsForPreference(preference, merged)
   }
 
-  if (activeField === 'when') {
-    if (turn.suggestedReplies.length >= 2) return turn.suggestedReplies.slice(0, 4)
-    return recommendWhenWindows(merged)
+  if (activeField === 'whereFrom') {
+    const origin = inferDefaultOrigin()
+    const originPills = turn.suggestedReplies.filter((item) => looksLikeOriginAnswer(item))
+    if (originPills.length >= 2) return originPills.slice(0, 4)
+    return [origin, 'Kuala Lumpur', 'Bangkok', 'Jakarta'].filter(
+      (city, index, list) => list.findIndex((item) => item.toLowerCase() === city.toLowerCase()) === index,
+    )
+  }
+
+  if (preferModel && turn.suggestedReplies.length >= 2) {
+    return turn.suggestedReplies.slice(0, 4)
   }
 
   if (turn.suggestedReplies.length >= 2) {
@@ -319,18 +402,92 @@ function destinationHintForContext(context: AgentContext = {}) {
   )
 }
 
+function sanitizeModelPatch(modelPatch: AgentContext, message: string): Required<AgentContext> {
+  const patch: Required<AgentContext> = { ...emptyContextPatch(), ...modelPatch }
+  if (patch.when) {
+    const normalized = normalizeDateWindow(patch.when) || normalizeDateWindow(message)
+    patch.when = normalized || ''
+  }
+  if (patch.whereFrom && !looksLikeOriginAnswer(patch.whereFrom)) patch.whereFrom = ''
+  if (patch.who && !isValidCapturedValue('who', patch.who)) patch.who = ''
+  if (patch.intent && !isValidCapturedValue('intent', patch.intent)) patch.intent = ''
+  return patch
+}
+
+function applyModelTurnPatch(input: AgentChatRequest, turn: AgentChatTurn) {
+  const sanitized = sanitizeModelPatch(turn.contextPatch, input.message)
+  return gateContextPatch(preserveValidatedChecklistFields(input.context ?? {}, sanitized), input.context ?? {})
+}
+
+function fieldCorrectionMessage(field: AgentChatTurn['activeField'], merged: Required<AgentContext>) {
+  const destination = merged.whereTo || 'your destination'
+  if (field === 'when') {
+    return `Got it — let's lock exact dates for ${destination}. Pick a weekend window or tell me how to narrow it.`
+  }
+  if (field === 'whereFrom') return `Where will you be travelling from for ${destination}?`
+  if (field === 'who') return `Who's joining you in ${destination}?`
+  if (field === 'intent') return `What would make this ${destination} trip feel like yours?`
+  return `Let's finish ${field} first.`
+}
+
 function finalizeChatTurn(input: AgentChatRequest, turn: AgentChatTurn, preferModel = false) {
-  const combinedPatch = combineContextPatch(input.message, input.context, turn.contextPatch)
-  const merged = mergedContext(input.context, combinedPatch) as Required<AgentContext>
-  const activeField = nextField(merged)
-  const captured = capturedFields(merged).length
-  const shouldFinish = captured >= 5
-  const suggestions = resolveSuggestedReplies(merged, activeField, turn, shouldFinish, preferModel)
+  const combinedPatch = preferModel
+    ? applyModelTurnPatch(input, turn)
+    : combineContextPatch(input.message, input.context, turn.contextPatch, {
+        skipWhenInfer: isDateRefinementRequest(input.message),
+      })
+  const merged = sanitizeChecklistContext(mergedContext(input.context, combinedPatch) as Required<AgentContext>)
+
+  let activeField = turn.activeField
+  let suggestionField = turn.suggestionField ?? turn.activeField
+  let messageIntent = turn.messageIntent
+  let shouldFinish = turn.shouldFinish
+  let addActivities = turn.addActivities ?? []
+  let assistantMessage = turn.assistantMessage
+
+  if (preferModel) {
+    if (messageIntent === 'confirm_trip') shouldFinish = departurePrerequisitesMet(merged)
+    if (messageIntent === 'add_activity') {
+      activeField = 'intent'
+      suggestionField = 'intent'
+      shouldFinish = false
+      if (addActivities.length === 0 && input.message.trim()) addActivities = [input.message.trim()]
+    }
+    if (messageIntent === 'checklist_step' || messageIntent === 'change_checklist') {
+      const clean = sanitizeChecklistContext(merged)
+      const required = currentRequiredField(clean)
+      if (isDateRefinementRequest(input.message) && canFocusField('when', clean)) {
+        activeField = 'when'
+        suggestionField = 'when'
+        if (turn.activeField !== 'when') assistantMessage = fieldCorrectionMessage('when', merged)
+      } else if (!canFocusField(activeField, clean)) {
+        activeField = required
+        suggestionField = required
+        assistantMessage = fieldCorrectionMessage(required, merged)
+      }
+    }
+  } else {
+    const activityMode = isActivityPickMessage(input.message, sanitizeChecklistContext(input.context ?? {}))
+    activeField = resolveFocusField(input.message, merged, input.focusField, { activityMode })
+    suggestionField = suggestFieldForReplies(turn.suggestedReplies, activeField)
+    messageIntent = isTripConfirmationMessage(input.message)
+      ? 'confirm_trip'
+      : activityMode
+        ? 'add_activity'
+        : 'checklist_step'
+    shouldFinish = capturedFields(merged).length >= 5 || messageIntent === 'confirm_trip'
+  }
+
+  const suggestions = resolveSuggestedReplies(merged, activeField, turn, shouldFinish, preferModel, input.message)
+  if (!preferModel) suggestionField = suggestFieldForReplies(suggestions, activeField)
 
   return {
-    assistantMessage: turn.assistantMessage,
+    assistantMessage,
     contextPatch: combinedPatch,
     activeField,
+    suggestionField,
+    messageIntent,
+    addActivities,
     suggestedReplies: suggestions,
     shouldFinish,
     confidence: turn.confidence,
@@ -338,10 +495,13 @@ function finalizeChatTurn(input: AgentChatRequest, turn: AgentChatTurn, preferMo
 }
 
 function fallbackChat(input: AgentChatRequest, trace: AgentTrace[]): AgentChatTurn {
-  const patch = inferPatch(input.message, input.context)
-  const merged = mergedContext(input.context, patch)
-  const activeField = nextField(merged)
-  const captured = ['whereTo', 'whereFrom', 'who', 'when', 'intent'].filter((key) => Boolean(merged[key as keyof typeof merged])).length
+  const patch = combineContextPatch(input.message, input.context, inferPatch(input.message, input.context), {
+    skipWhenInfer: isDateRefinementRequest(input.message),
+  })
+  const merged = mergedContext(input.context, patch) as Required<AgentContext>
+  const activityMode = isActivityPickMessage(input.message, sanitizeChecklistContext(input.context ?? {}))
+  const activeField = resolveFocusField(input.message, merged, input.focusField, { activityMode })
+  const captured = capturedFields(merged).length
   trace.push({
     name: 'fallback_chat',
     label: 'Fallback chat',
@@ -354,13 +514,25 @@ function fallbackChat(input: AgentChatRequest, trace: AgentTrace[]): AgentChatTu
       ? `I have the essentials: ${merged.whereTo} from ${merged.whereFrom}, ${merged.when}, for ${merged.who}, focused on ${merged.intent}. I can finish the trip now or tune the style first.`
       : `Got it. I captured ${captured} of 5 essentials. Next I need ${activeField === 'whereTo' ? 'where you want to go' : activeField === 'who' ? "who's coming" : activeField === 'when' ? "when you'd go" : 'what would make the trip yours'}.`
 
+  const messageIntent: ChatMessageIntent = isTripConfirmationMessage(input.message)
+    ? 'confirm_trip'
+    : activityMode
+      ? 'add_activity'
+      : 'checklist_step'
+
   return {
     assistantMessage,
     contextPatch: patch,
     activeField,
+    suggestionField: activeField,
+    messageIntent,
+    addActivities: messageIntent === 'add_activity' ? [input.message.trim()] : [],
     suggestedReplies:
       activeField === 'when'
-        ? recommendWhenWindows(merged)
+        ? recommendWhenWindowsForPreference(
+            looksLikeVagueDateHint(input.message) ? input.message : undefined,
+            merged,
+          )
         : activeField === 'whereTo'
           ? ['Tokyo + Kyoto', 'Bali', 'Surprise me under $1.5k']
           : activeField === 'who'
@@ -562,13 +734,25 @@ async function callChatModel(input: AgentChatRequest, trace: AgentTrace[]): Prom
             currentContext: input.context ?? {},
             capturedFields: capturedFields(mergedContext(input.context ?? {}, {}) as Required<AgentContext>),
             missingFields: missingFields(mergedContext(input.context ?? {}, {}) as Required<AgentContext>),
+            departurePrerequisitesMet: departurePrerequisitesMet(input.context ?? {}),
+            suggestedOrigin: inferDefaultOrigin(),
+            focusField: resolveFocusField(
+              input.message,
+              mergedContext(input.context ?? {}, {}) as Required<AgentContext>,
+              input.focusField,
+            ),
+            conversationPhase: conversationPhase(input.context ?? {}, {
+              hasSummaryActions: (input.history ?? []).some((entry) =>
+                /confirm summary|change dates|add more activities/i.test(entry.content),
+              ),
+            }),
             today: new Date().toISOString().slice(0, 10),
             destinationHint: destinationHintForContext(input.context),
             recentHistory: (input.history ?? []).slice(-8),
             destinationInventory: destinations,
             checklistOrder: captureOrder,
             instruction:
-              'Infer only fields strongly supported by the message or inventory. If the user already answered a missing field in this message, fill contextPatch and advance to the next missing field. Pills must match activeField only.',
+              'Classify messageIntent from user meaning and conversationPhase. Trust your inference — do not treat confirmations as activities or cities as activities.',
           }),
         },
       ],
@@ -580,7 +764,17 @@ async function callChatModel(input: AgentChatRequest, trace: AgentTrace[]): Prom
           schema: {
             type: 'object',
             additionalProperties: false,
-            required: ['assistantMessage', 'contextPatch', 'activeField', 'suggestedReplies', 'shouldFinish', 'confidence'],
+            required: [
+              'assistantMessage',
+              'contextPatch',
+              'activeField',
+              'suggestionField',
+              'messageIntent',
+              'addActivities',
+              'suggestedReplies',
+              'shouldFinish',
+              'confidence',
+            ],
             properties: {
               assistantMessage: { type: 'string' },
               contextPatch: {
@@ -598,6 +792,15 @@ async function callChatModel(input: AgentChatRequest, trace: AgentTrace[]): Prom
                 },
               },
               activeField: { type: 'string', enum: ['whereTo', 'whereFrom', 'who', 'when', 'intent'] },
+              suggestionField: { type: 'string', enum: ['whereTo', 'whereFrom', 'who', 'when', 'intent'] },
+              messageIntent: {
+                type: 'string',
+                enum: ['checklist_step', 'add_activity', 'confirm_trip', 'change_checklist', 'clarify'],
+              },
+              addActivities: {
+                type: 'array',
+                items: { type: 'string', maxLength: 80 },
+              },
               suggestedReplies: {
                 type: 'array',
                 minItems: 1,
@@ -627,7 +830,7 @@ async function callChatModel(input: AgentChatRequest, trace: AgentTrace[]): Prom
   const text = extractResponseText(body)
   if (!text) return null
   try {
-    return JSON.parse(text) as AgentChatTurn
+    return normalizeAgentTurn(JSON.parse(text) as AgentChatTurn)
   } catch {
     trace.push({
       name: 'parse_chat_turn',
@@ -636,6 +839,20 @@ async function callChatModel(input: AgentChatRequest, trace: AgentTrace[]): Prom
       result: 'Model chat output was not parseable JSON; used local chat fallback.',
     })
     return null
+  }
+}
+
+function normalizeAgentTurn(raw: AgentChatTurn): AgentChatTurn {
+  return {
+    assistantMessage: raw.assistantMessage,
+    contextPatch: { ...emptyContextPatch(), ...raw.contextPatch },
+    activeField: raw.activeField ?? 'whereTo',
+    suggestionField: raw.suggestionField ?? raw.activeField ?? 'whereTo',
+    messageIntent: raw.messageIntent ?? 'checklist_step',
+    addActivities: raw.addActivities ?? [],
+    suggestedReplies: raw.suggestedReplies ?? [],
+    shouldFinish: raw.shouldFinish ?? false,
+    confidence: raw.confidence ?? 80,
   }
 }
 
@@ -678,6 +895,32 @@ export async function runTravelChat(input: AgentChatRequest) {
     }
   }
 
+  const baseContext = mergedContext(input.context ?? {}, {}) as Required<AgentContext>
+  if (baseContext.whereTo && mentionsDifferentDestination(input.message, baseContext.whereTo)) {
+    const focus = resolveFocusField(input.message, baseContext, input.focusField)
+    trace.push({
+      name: 'destination_locked',
+      label: 'Destination locked',
+      status: 'complete',
+      result: 'User mentioned a different destination; this chat stays on the original trip.',
+    })
+    return {
+      mode: 'fallback',
+      assistantMessage: compactAssistantMessage(
+        `This chat is locked to ${baseContext.whereTo}. To plan a different destination, tap + for a new trip.`,
+      ),
+      contextPatch: emptyContextPatch(),
+      activeField: focus === 'whereTo' ? 'when' : focus,
+      suggestionField: focus === 'whereTo' ? 'when' : focus,
+      messageIntent: 'clarify',
+      addActivities: [],
+      suggestedReplies: [],
+      shouldFinish: false,
+      confidence: 82,
+      trace,
+    }
+  }
+
   const modelTurn = await callChatModel(input, trace)
   const rawTurn = modelTurn ?? fallbackChat(input, trace)
   const turn = finalizeChatTurn(input, rawTurn, Boolean(modelTurn))
@@ -694,6 +937,9 @@ export async function runTravelChat(input: AgentChatRequest) {
     assistantMessage: compactAssistantMessage(turn.assistantMessage),
     contextPatch: turn.contextPatch,
     activeField: turn.activeField,
+    suggestionField: turn.suggestionField,
+    messageIntent: turn.messageIntent,
+    addActivities: turn.addActivities,
     suggestedReplies: turn.suggestedReplies,
     shouldFinish: turn.shouldFinish,
     confidence: normalizeConfidence(turn.confidence),

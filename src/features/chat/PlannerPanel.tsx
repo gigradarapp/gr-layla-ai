@@ -4,6 +4,7 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowUp,
+  Braces,
   Calendar,
   Check,
   CheckCircle2,
@@ -11,6 +12,7 @@ import {
   ChevronUp,
   Circle,
   Copy,
+  Download,
   Loader2,
   MapPin,
   Mic,
@@ -23,7 +25,28 @@ import {
   Heart,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { recommendWhenWindows } from '../../../shared/recommendWhen'
+import {
+  departurePrerequisitesMet,
+  canFocusField,
+  checklistComplete,
+  currentRequiredField,
+  gateContextPatch,
+  firstMissingField,
+  inferFieldFromValue,
+  isTripConfirmationMessage,
+  normalizeDateWindow,
+  preserveValidatedChecklistFields,
+  isDateRefinementRequest,
+  isValidCapturedValue,
+  looksLikeDateWindow,
+  looksLikeOriginAnswer,
+  looksLikeVagueDateHint,
+  mentionsDifferentDestination,
+  sanitizeChecklistContext,
+  suggestFieldForReplies,
+} from '../../../shared/checklistFocus'
+import { inferDefaultOrigin, originConfirmationPrompt, whereFromSuggestionPills } from '../../../shared/inferredOrigin'
+import { recommendWhenWindowsForPreference } from '../../../shared/recommendWhen'
 import { api } from '../../lib/api'
 import type { AgentChatResponse, AgentTrace, TripDetail } from '../../lib/types'
 
@@ -64,7 +87,9 @@ const emptyContext: TripContext = {
 }
 
 function normalizeActivityLabel(value: string) {
-  return value.replace(/\s+/g, ' ').trim()
+  const trimmed = value.replace(/\s+/g, ' ').trim()
+  if (isTripConfirmationMessage(trimmed)) return ''
+  return trimmed
 }
 
 function ensureActivitiesFromIntent(context: TripContext): TripContext {
@@ -152,13 +177,13 @@ const checklist: Array<{
   icon: typeof MapPin
 }> = [
   { key: 'whereTo', label: 'Where to', empty: "I'll help pick or confirm the destination", icon: MapPin },
-  { key: 'whereFrom', label: 'Where from', empty: "I'll ask where you're setting off from", icon: PlaneTakeoff },
-  { key: 'who', label: "Who's coming", empty: "I'll ask who you're travelling with", icon: Users },
+  { key: 'whereFrom', label: 'Where from', empty: "I'll confirm where you're setting off from", icon: PlaneTakeoff },
   { key: 'when', label: "When you'd go", empty: "I'll ask when you'd like to travel", icon: Calendar },
+  { key: 'who', label: "Who's coming", empty: "I'll ask who you're travelling with", icon: Users },
   { key: 'intent', label: "What you're after", empty: 'Tell me what would make this trip yours', icon: Heart },
 ]
 
-const captureOrder: FieldKey[] = ['whereTo', 'when', 'who', 'intent', 'whereFrom']
+const captureOrder: FieldKey[] = ['whereTo', 'whereFrom', 'when', 'who', 'intent']
 
 const SUGGEST_MORE_LABEL = 'Suggest more recommendations...'
 const ACTIVITY_IM_GOOD_LABEL = "I'm good"
@@ -230,10 +255,16 @@ function collectExcludedSuggestions(messages: ChatMessage[], field: FieldKey) {
   return [...excluded]
 }
 
-function resolveSuggestions(field: FieldKey, fromAgent: string[], context: TripContext) {
+function resolveSuggestions(field: FieldKey, fromAgent: string[], context: TripContext, datePreference?: string) {
   if (field === 'when') {
-    if (fromAgent.length >= 2) return fromAgent.slice(0, 4)
-    return recommendWhenWindows(context)
+    const concrete = fromAgent.filter((item) => looksLikeDateWindow(item))
+    if (concrete.length >= 2) return concrete.slice(0, 4)
+    return recommendWhenWindowsForPreference(datePreference, context)
+  }
+  if (field === 'whereFrom') {
+    const originPills = fromAgent.filter((item) => looksLikeOriginAnswer(item))
+    if (originPills.length >= 2) return originPills.slice(0, 4)
+    return whereFromSuggestionPills(inferDefaultOrigin())
   }
   if (fromAgent.length) return fromAgent
   return fieldSuggestions[field as Exclude<FieldKey, 'when'>] ?? []
@@ -301,38 +332,77 @@ function buildSummaryAssistantMessage(context: TripContext): ChatMessage {
   }
 }
 
-function shouldReplaceDateClarification(merged: TripContext, content: string, nextField: FieldKey) {
-  if (!merged.when || nextField === 'when') return false
-  return /\b(sat|sun|weekend|date|when|mon)\b/i.test(content) && content.includes('?')
-}
-
-function forwardChecklistPrompt(merged: TripContext, nextField: FieldKey) {
-  const label = checklist.find((item) => item.key === nextField)?.label.toLowerCase() ?? 'the next detail'
-  return `Got it — ${merged.when} is locked in for ${displayValue(merged, 'whereTo')}. Last one: ${label}?`
-}
-
-function buildAssistantFromAgentResponse(result: AgentChatResponse, merged: TripContext): ChatMessage {
+function buildAssistantFromAgentResponse(result: AgentChatResponse, merged: TripContext, userText = ''): ChatMessage {
   const keepCollecting =
     result.suggestedReplies.length > 0 && !isSummarySuggestionSet(result.suggestedReplies)
   if ((capturedCount(merged) >= 5 || result.shouldFinish) && !keepCollecting) {
     return buildSummaryAssistantMessage(merged)
   }
 
-  const field = nextMissingField(merged) ?? result.activeField
+  const datePreference = looksLikeVagueDateHint(userText) ? userText : undefined
+  const pillField = result.suggestionField ?? result.activeField
+  const whenPills =
+    pillField === 'when' ? result.suggestedReplies.filter((item) => looksLikeDateWindow(item)) : result.suggestedReplies
   const suggestions =
-    result.mode === 'model' && result.suggestedReplies.length >= 2
-      ? withSuggestMoreChip(result.suggestedReplies.slice(0, 4), field, false, merged)
-      : resolveSuggestions(field, result.suggestedReplies, merged)
-  const content = shouldReplaceDateClarification(merged, result.assistantMessage, field)
-    ? forwardChecklistPrompt(merged, field)
-    : result.assistantMessage
+    result.mode === 'model' && whenPills.length >= 2
+      ? withSuggestMoreChip(whenPills.slice(0, 4), pillField, false, merged)
+      : resolveSuggestions(pillField, result.suggestedReplies, merged, datePreference)
+  const field = suggestFieldForReplies(suggestions, pillField)
 
   return {
     id: nextId(),
     role: 'assistant',
-    content,
+    content: result.assistantMessage,
     suggestions,
     suggestionField: field,
+  }
+}
+
+function focusPromptMessage(context: TripContext, field: FieldKey): ChatMessage {
+  const destination = displayValue(context, 'whereTo') || 'your trip'
+  if (field === 'when') {
+    return {
+      id: nextId(),
+      role: 'assistant',
+      content: `Sure — here are some ${destination} date windows. Pick one or tell me how to narrow it down.`,
+      suggestions: resolveSuggestions('when', [], context),
+      suggestionField: 'when',
+    }
+  }
+  if (field === 'whereFrom') {
+    const origin = inferDefaultOrigin()
+    return {
+      id: nextId(),
+      role: 'assistant',
+      content: originConfirmationPrompt(origin, destination),
+      suggestions: resolveSuggestions('whereFrom', [], context),
+      suggestionField: 'whereFrom',
+    }
+  }
+  if (field === 'who') {
+    return {
+      id: nextId(),
+      role: 'assistant',
+      content: `Who's joining you in ${destination}?`,
+      suggestions: resolveSuggestions('who', [], context),
+      suggestionField: 'who',
+    }
+  }
+  if (field === 'intent') {
+    return {
+      id: nextId(),
+      role: 'assistant',
+      content: `What kind of vibe do you want for ${destination}?`,
+      suggestions: resolveSuggestions('intent', [], context),
+      suggestionField: 'intent',
+    }
+  }
+  return {
+    id: nextId(),
+    role: 'assistant',
+    content: 'Where would you like to go?',
+    suggestions: resolveSuggestions('whereTo', [], context),
+    suggestionField: 'whereTo',
   }
 }
 
@@ -353,11 +423,12 @@ function valueForField(context: TripContext, key: FieldKey) {
 }
 
 function capturedCount(context: TripContext) {
-  return checklist.filter((item) => Boolean(valueForField(context, item.key))).length
+  const clean = sanitizeChecklistContext(context)
+  return checklist.filter((item) => isValidCapturedValue(item.key, clean[item.key])).length
 }
 
 function nextMissingField(context: TripContext): FieldKey | null {
-  return captureOrder.find((key) => !valueForField(context, key)) ?? null
+  return firstMissingField(sanitizeChecklistContext(context))
 }
 
 function displayValue(context: TripContext, key: FieldKey) {
@@ -368,6 +439,7 @@ function displayValue(context: TripContext, key: FieldKey) {
 }
 
 function normalizeWho(value: string) {
+  if (looksLikeDateWindow(value)) return ''
   const lower = value.toLowerCase()
   if (lower.includes('family') || lower.includes('kid')) return 'Family'
   if (lower.includes('friend') || lower.includes('group')) return 'Friends'
@@ -376,65 +448,47 @@ function normalizeWho(value: string) {
   return value
 }
 
-function looksLikeDateWindow(value: string) {
-  return (
-    /\b(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\s+\d{1,2}\s+[a-z]{3,}/i.test(value) ||
-    /\d{1,2}\s+[a-z]{3,}\s*(?:[–—-]\s*|\s+to\s+)/i.test(value) ||
-    /\b\d{4}-\d{2}-\d{2}\b/.test(value)
-  )
-}
-
-function normalizeWhen(value: string, current: string) {
-  const trimmed = value.trim()
-  if (looksLikeDateWindow(trimmed)) return trimmed.length <= 56 ? trimmed : trimmed.slice(0, 56)
-
-  const lower = trimmed.toLowerCase()
-  if (/sat/.test(lower) && /sun/.test(lower)) return trimmed
-  if (lower.includes('sun-mon') || lower.includes('sun mon')) return 'Sun–Mon'
-  if (lower.includes('this month')) return 'This month'
-  if (lower.includes('next month')) return 'Next month'
-  if (lower.includes('overnight') && current && !current.toLowerCase().includes('overnight')) {
-    return `${current}, overnight stay`
-  }
-  if (lower.includes('weekend') && lower.includes('next')) return 'Next weekend'
-  if (lower.includes('weekend')) return trimmed || 'This weekend'
-  if (lower.includes('day')) return 'Just for a day'
-  return trimmed
+function normalizeWhen(value: string) {
+  return normalizeDateWindow(value)
 }
 
 function applyFieldValue(context: TripContext, key: FieldKey, value: string): TripContext {
-  if (key === 'whereTo') {
-    return {
+  const inferred = inferFieldFromValue(value)
+  const target = inferred ?? key
+
+  if (target === 'whereTo') {
+    return sanitizeChecklistContext({
       ...context,
       whereTo: value.toLowerCase().includes('johor') ? 'Johor Bahru, Malaysia' : value,
-    }
+    })
   }
-  if (key === 'whereFrom') return { ...context, whereFrom: value }
-  if (key === 'who') return { ...context, who: normalizeWho(value) }
-  if (key === 'when') return { ...context, when: normalizeWhen(value, context.when) }
-  return addTripActivity({ ...context, intent: value }, value).context
+  if (target === 'whereFrom') return sanitizeChecklistContext({ ...context, whereFrom: value })
+  if (target === 'who') return sanitizeChecklistContext({ ...context, who: normalizeWho(value) })
+  if (target === 'when') return sanitizeChecklistContext({ ...context, when: normalizeWhen(value) })
+  return sanitizeChecklistContext(addTripActivity({ ...context, intent: value }, value).context)
 }
 
 function inferContextFromPrompt(prompt: string, current: TripContext): TripContext {
+  if (current.whereTo && mentionsDifferentDestination(prompt, current.whereTo)) return current
+
   const lower = prompt.toLowerCase()
   const next = { ...current }
 
-  if (lower.includes('johor') || lower.includes('jb') || lower.includes('bahru')) next.whereTo = 'Johor Bahru, Malaysia'
-  if (lower.includes('tokyo') || lower.includes('kyoto') || lower.includes('japan')) next.whereTo = 'Tokyo + Kyoto'
-  if (lower.includes('bali')) next.whereTo = 'Bali'
-  if (lower.includes('singapore')) next.whereFrom = 'Singapore'
+  if (!current.whereTo) {
+    if (lower.includes('johor') || lower.includes('jb') || lower.includes('bahru')) next.whereTo = 'Johor Bahru, Malaysia'
+    if (lower.includes('tokyo') || lower.includes('kyoto') || lower.includes('japan')) next.whereTo = 'Tokyo + Kyoto'
+    if (lower.includes('bali')) next.whereTo = 'Bali'
+  }
+  if (looksLikeOriginAnswer(prompt) || /\bfrom\s+singapore\b/i.test(lower)) next.whereFrom = 'Singapore'
+  if (/\bfrom\s+kuala lumpur\b/i.test(lower) || /\bfrom\s+kl\b/i.test(lower)) next.whereFrom = 'Kuala Lumpur'
+  if (/\bfrom\s+bangkok\b/i.test(lower)) next.whereFrom = 'Bangkok'
   if (lower.includes('solo')) next.who = 'Solo'
   if (lower.includes('family') || lower.includes('kids')) next.who = 'Family'
   if (lower.includes('couple') || lower.includes('two')) next.who = 'Couple'
   if (lower.includes('friend') || lower.includes('group')) next.who = 'Friends'
   if (looksLikeDateWindow(prompt)) {
-    next.when = normalizeWhen(prompt, next.when || current.when)
-  } else if (/sat[^\w]*sun|sat\s*[–-]\s*sun|saturday.*sunday/i.test(prompt)) {
-    next.when = prompt.trim().length <= 42 ? prompt.trim() : 'Sat–Sun (this weekend)'
-  } else if (lower.includes('weekend') || lower.includes('may 29') || lower.includes('may 30') || lower.includes('month')) {
-    next.when = normalizeWhen(prompt, next.when || current.when)
+    next.when = normalizeWhen(prompt)
   }
-  if (lower.includes('overnight')) next.when = normalizeWhen(prompt, next.when || current.when)
   if (lower.includes('budget') || lower.includes('cheap') || lower.includes('50 sgd') || lower.includes('under 50')) {
     next.budgetLevel = 'budget'
   }
@@ -442,9 +496,7 @@ function inferContextFromPrompt(prompt: string, current: TripContext): TripConte
     next.intent = lower.includes('cafe') ? 'Cafe hopping and local activities' : 'Relaxation and local activities'
   }
   if (lower.includes('food') || lower.includes('shopping')) next.intent = 'Food and shopping'
-  if (next.whereTo.includes('Johor') && next.who && next.when && !next.whereFrom) next.whereFrom = 'Singapore'
-
-  return next
+  return sanitizeChecklistContext(gateContextPatch(next, current))
 }
 
 function summaryPrompt(context: TripContext) {
@@ -476,7 +528,7 @@ function composePlanPrompt(context: TripContext) {
   }. Build it as a realistic dream itinerary with route, stay, local activities, and booking-style handoff.`
 }
 
-function fallbackAssistantMessage(context: TripContext, userText?: string): ChatMessage {
+function fallbackAssistantMessage(context: TripContext, userText = ''): ChatMessage {
   if (capturedCount(context) >= 5) {
     if (userText && /more activit|more ideas|more recommend/i.test(userText.toLowerCase())) {
       return {
@@ -492,22 +544,169 @@ function fallbackAssistantMessage(context: TripContext, userText?: string): Chat
 
   const field = nextMissingField(context) ?? 'intent'
   const label = checklist.find((item) => item.key === field)?.label.toLowerCase() ?? 'the next detail'
+  const datePreference = looksLikeVagueDateHint(userText) ? userText : undefined
 
   return {
     id: nextId(),
     role: 'assistant',
-    content: `Got it — I still need ${label} before I can build your trip card.`,
-    suggestions: resolveSuggestions(field, [], context),
+    content:
+      field === 'when' && datePreference
+        ? `Got it — ${userText.trim()}. Which exact dates work for you?`
+        : `Got it — I still need ${label} before I can build your trip card.`,
+    suggestions: resolveSuggestions(field, [], context, datePreference),
     suggestionField: field,
   }
 }
 
 function isSummaryConfirmation(value: string) {
-  const lower = value.toLowerCase()
-  return lower.includes('confirm') || lower.includes('sounds good') || lower.includes('looks good') || lower.includes('go ahead')
+  return isTripConfirmationMessage(value)
 }
 
-function LaylaTopBar({ onNewTrip, onBack }: { onNewTrip?: () => void; onBack?: () => void }) {
+function shouldStartTripGeneration(ctx: TripContext, transcript: ChatMessage[]) {
+  if (!checklistComplete(ctx)) return false
+  const lastAssistant = [...transcript].reverse().find((message) => message.role === 'assistant')
+  return Boolean(lastAssistant?.summaryActions) || capturedCount(ctx) >= 5
+}
+
+type ChatLogExport = {
+  exportedAt: string
+  stage: Stage
+  activeField: FieldKey
+  context: TripContext
+  messages: ChatMessage[]
+  toolTrace: AgentTrace[]
+  lastTrip: TripDetail | null
+  flags: {
+    assistantTyping: boolean
+    agentPending: boolean
+    chatPending: boolean
+  }
+  meta: {
+    messageCount: number
+    url: string
+    userAgent: string
+  }
+}
+
+function chatLogFilename() {
+  return `layla-chat-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`
+}
+
+function serializeChatLogExport(payload: ChatLogExport) {
+  return JSON.stringify(payload, null, 2)
+}
+
+async function copyChatLogExport(payload: ChatLogExport) {
+  const json = serializeChatLogExport(payload)
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(json)
+    return
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = json
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  document.body.appendChild(textarea)
+  textarea.select()
+  document.execCommand('copy')
+  document.body.removeChild(textarea)
+}
+
+function downloadChatLogExport(payload: ChatLogExport) {
+  const blob = new Blob([serializeChatLogExport(payload)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = chatLogFilename()
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
+function ChatLogExportMenu({ getExport }: { getExport: () => ChatLogExport }) {
+  const menuRef = useRef<HTMLDivElement | null>(null)
+  const [open, setOpen] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    window.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (!notice) return
+    const timer = window.setTimeout(() => setNotice(null), 2200)
+    return () => window.clearTimeout(timer)
+  }, [notice])
+
+  async function runExport(mode: 'copy' | 'download') {
+    try {
+      const payload = getExport()
+      if (mode === 'copy') {
+        await copyChatLogExport(payload)
+        setNotice('Chat log copied as JSON')
+      } else {
+        downloadChatLogExport(payload)
+        setNotice('Chat log downloaded')
+      }
+      setOpen(false)
+    } catch {
+      setNotice('Export failed — try again')
+    }
+  }
+
+  return (
+    <div className="layla-chat-export" ref={menuRef}>
+      <button
+        type="button"
+        aria-label="Export chat logs"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <Braces size={18} />
+      </button>
+      {open ? (
+        <div className="layla-chat-export-menu" role="menu">
+          <button type="button" role="menuitem" onClick={() => void runExport('copy')}>
+            <Copy size={16} />
+            Copy JSON
+          </button>
+          <button type="button" role="menuitem" onClick={() => void runExport('download')}>
+            <Download size={16} />
+            Download JSON
+          </button>
+        </div>
+      ) : null}
+      {notice ? (
+        <p className="layla-chat-export-notice" role="status" aria-live="polite">
+          {notice}
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+function LaylaTopBar({
+  onNewTrip,
+  onBack,
+  getChatLogExport,
+}: {
+  onNewTrip?: () => void
+  onBack?: () => void
+  getChatLogExport?: () => ChatLogExport
+}) {
   return (
     <div className="layla-topbar">
       <div className="layla-topbar-start">
@@ -519,6 +718,7 @@ function LaylaTopBar({ onNewTrip, onBack }: { onNewTrip?: () => void; onBack?: (
         <strong>Layla.</strong>
       </div>
       <div className="layla-top-actions">
+        {getChatLogExport ? <ChatLogExportMenu getExport={getChatLogExport} /> : null}
         <button type="button" aria-label="New trip" onClick={onNewTrip}>
           <Plus size={21} />
         </button>
@@ -560,7 +760,15 @@ function TripChecklistBar({
   )
 }
 
-function TripChecklistSheet({ context }: { context: TripContext }) {
+function TripChecklistSheet({
+  context,
+  focusField,
+  onFocusField,
+}: {
+  context: TripContext
+  focusField: FieldKey
+  onFocusField: (field: FieldKey) => void
+}) {
   const progress = capturedCount(context)
   return (
     <section className="trip-checklist-sheet-v2">
@@ -580,9 +788,31 @@ function TripChecklistSheet({ context }: { context: TripContext }) {
           const value = displayValue(context, item.key)
           const ctx = ensureActivitiesFromIntent(context)
           const activityItems = item.key === 'intent' ? ctx.activities : []
-          const done = Boolean(value) || (item.key === 'intent' && activityItems.length > 0)
+          const done =
+            isValidCapturedValue(item.key, context[item.key]) ||
+            (item.key === 'intent' && activityItems.length > 0)
+          const locked = item.key === 'whereTo' && Boolean(context.whereTo)
+          const required = currentRequiredField(context)
+          const gated = !canFocusField(item.key, context)
+          const interactive = !locked && !gated
+          const active = focusField === item.key || (item.key === required && !done)
           return (
-            <div key={item.key} className={done ? 'checklist-step done' : 'checklist-step'}>
+            <button
+              key={item.key}
+              type="button"
+              className={[
+                'checklist-step',
+                done ? 'done' : '',
+                active ? 'is-focus' : '',
+                interactive ? 'is-interactive' : '',
+                locked ? 'is-locked' : '',
+                gated ? 'is-gated' : '',
+              ]
+                .filter(Boolean)
+                .join(' ')}
+              disabled={!interactive}
+              onClick={() => onFocusField(item.key)}
+            >
               <span className="step-status">{done ? <Check size={16} /> : null}</span>
               <div>
                 <span className="step-label">
@@ -608,7 +838,7 @@ function TripChecklistSheet({ context }: { context: TripContext }) {
                   </div>
                 ) : null}
               </div>
-            </div>
+            </button>
           )
         })}
       </div>
@@ -655,7 +885,11 @@ function ChatBubble({
               key={`${message.id}-${suggestion}`}
               type="button"
               className={
-                suggestion === SUGGEST_MORE_LABEL || suggestion === ACTIVITY_ADD_MORE_LABEL ? 'is-suggest-more' : undefined
+                suggestion === ACTIVITY_IM_GOOD_LABEL
+                  ? 'is-activity-done'
+                  : suggestion === SUGGEST_MORE_LABEL || suggestion === ACTIVITY_ADD_MORE_LABEL
+                    ? 'is-suggest-more'
+                    : undefined
               }
               disabled={suggestionsDisabled}
               onPointerDown={(event) => {
@@ -893,6 +1127,7 @@ export function PlannerPanel({ compact = false }: { compact?: boolean }) {
       message: string
       context: TripContext
       history: Array<{ role: 'user' | 'assistant'; content: string }>
+      focusField?: FieldKey
       moreSuggestions?: { field: FieldKey; exclude: string[] }
     }) => api.agentChat(payload),
   })
@@ -922,15 +1157,63 @@ export function PlannerPanel({ compact = false }: { compact?: boolean }) {
         message: userText,
         context: previousContext,
         history,
+        focusField: activeField,
       })
-      const merged = mergeTripContext(
-        mergeTripContext(previousContext, result.contextPatch),
-        inferContextFromPrompt(userText, previousContext),
+      const merged = sanitizeChecklistContext(
+        preserveValidatedChecklistFields(
+          previousContext,
+          mergeTripContext(
+            mergeTripContext(previousContext, result.contextPatch),
+            inferContextFromPrompt(userText, previousContext),
+          ),
+        ),
       )
-      setContext(merged)
       setToolTrace(result.trace)
-      const assistant = buildAssistantFromAgentResponse(result, merged)
-      setActiveField(assistant.suggestionField ?? nextMissingField(merged) ?? 'intent')
+
+      if (result.messageIntent === 'confirm_trip' && shouldStartTripGeneration(merged, transcript)) {
+        setContext(merged)
+        setAssistantTyping(false)
+        startGeneration(userText)
+        return
+      }
+
+      if (result.messageIntent === 'add_activity') {
+        const labels = result.addActivities.length > 0 ? result.addActivities : [userText.trim()]
+        let withActivity = merged
+        let lastLabel = userText.trim()
+        for (const label of labels) {
+          const next = addTripActivity(ensureActivitiesFromIntent(withActivity), label)
+          if (!next.added && next.reason === 'duplicate') {
+            setContext(withActivity)
+            setAssistantTyping(false)
+            deliverAssistantReply({
+              id: nextId(),
+              role: 'assistant',
+              content: `"${label}" is already on your list. ${activitySlotsMessage(withActivity)}`,
+              suggestions: [...summaryActionSuggestions],
+              summaryActions: true,
+            })
+            return
+          }
+          if (!next.added && next.reason === 'max') {
+            setContext(withActivity)
+            setAssistantTyping(false)
+            deliverActivityLimitReply(withActivity)
+            return
+          }
+          withActivity = next.context
+          lastLabel = label
+        }
+        setContext(withActivity)
+        setActiveField(result.suggestionField ?? 'intent')
+        setAssistantTyping(false)
+        deliverActivityPicker(withActivity, transcript, [], lastLabel)
+        return
+      }
+
+      setContext(merged)
+      const assistant = buildAssistantFromAgentResponse(result, merged, userText)
+      setActiveField(result.suggestionField ?? currentRequiredField(merged))
       if (capturedCount(merged) >= 5) setChecklistExpanded(false)
       deliverAssistantReply(assistant, { delayMs: result.mode === 'model' ? 0 : undefined })
     } catch {
@@ -945,9 +1228,7 @@ export function PlannerPanel({ compact = false }: { compact?: boolean }) {
   const latestAssistantWithSuggestions = useMemo(() => {
     return [...messages].reverse().find((message) => message.role === 'assistant' && message.suggestions?.length)
   }, [messages])
-  const activeSuggestionField = useMemo(() => {
-    return nextMissingField(context) ?? latestAssistantWithSuggestions?.suggestionField ?? activeField
-  }, [activeField, context, latestAssistantWithSuggestions])
+  const activeSuggestionField = activeField
 
   const latestSuggestions = useMemo(() => {
     const latest = latestAssistantWithSuggestions
@@ -955,10 +1236,8 @@ export function PlannerPanel({ compact = false }: { compact?: boolean }) {
       return latest.suggestions
     }
 
-    const missingField = nextMissingField(context)
-    const field = missingField ?? latest?.suggestionField ?? activeField
-    const fromMessage =
-      latest?.suggestionField === field || (!missingField && latest?.suggestionField) ? (latest?.suggestions ?? []) : []
+    const field = latest?.suggestionField === activeField ? activeField : activeField
+    const fromMessage = latest?.suggestionField === field ? (latest?.suggestions ?? []) : []
     const resolved = resolveSuggestions(field, fromMessage, context)
     return withSuggestMoreChip(resolved, field, latest?.summaryActions, context)
   }, [activeField, context, latestAssistantWithSuggestions])
@@ -1169,26 +1448,6 @@ export function PlannerPanel({ compact = false }: { compact?: boolean }) {
 
     clearAssistantReplyTimer()
     setAssistantTyping(false)
-    if (progress >= 5 && isSummaryConfirmation(trimmed)) {
-      setInput('')
-      startGeneration(trimmed)
-      return
-    }
-    if (progress < 5 && isSummaryConfirmation(trimmed)) {
-      const missingField = nextMissingField(context) ?? activeField
-      const missingLabel = checklist.find((item) => item.key === missingField)?.label.toLowerCase() ?? 'the next detail'
-      setActiveField(missingField)
-      setMessages((current) => [...current, { id: nextId(), role: 'user', content: trimmed }])
-      deliverAssistantReply({
-        id: nextId(),
-        role: 'assistant',
-        content: `Almost there. Before I build the itinerary, I still need ${missingLabel}. Answer that and the checklist can move to the final summary.`,
-        suggestions: resolveSuggestions(missingField, [], context),
-        suggestionField: missingField,
-      })
-      setInput('')
-      return
-    }
     setInput('')
     void processChatTurn(trimmed, { allowWhilePending: true })
   }
@@ -1214,53 +1473,54 @@ export function PlannerPanel({ compact = false }: { compact?: boolean }) {
       return
     }
 
-    const selectedField = field ?? activeSuggestionField
-    const prior = ensureActivitiesFromIntent(context)
-    const isAddingMoreActivity =
-      selectedField === 'intent' && capturedCount(context) >= 5 && prior.activities.length > 0
+    const required = currentRequiredField(context)
+    const inferredField = inferFieldFromValue(value)
+    const pillField = field ?? activeField
+    const selectedField =
+      pillField === required || (pillField && canFocusField(pillField, context))
+        ? (pillField ?? required)
+        : inferredField && canFocusField(inferredField, context)
+          ? inferredField
+          : required
+    setActiveField(selectedField)
     const userMessage: ChatMessage = { id: nextId(), role: 'user', content: value }
 
     setMessages((current) => [...current, userMessage])
 
-    if (isAddingMoreActivity) {
-      const { context: withActivity, added, reason } = addTripActivity(prior, value)
-      const seedContext = inferContextFromPrompt(value, withActivity)
-      setContext(seedContext)
-
-      if (!added && reason === 'max') {
-        deliverActivityLimitReply(seedContext)
-        return
-      }
-      if (!added && reason === 'duplicate') {
-        deliverAssistantReply({
-          id: nextId(),
-          role: 'assistant',
-          content: `"${value}" is already on your list. ${activitySlotsMessage(seedContext)}`,
-          suggestions: [...summaryActionSuggestions],
-          summaryActions: true,
-        })
-        return
-      }
-
-      if (seedContext.activities.length >= MAX_TRIP_ACTIVITIES) {
-        deliverActivityLimitReply(seedContext)
-        return
-      }
-
-      deliverActivityPicker(seedContext, [...messages, userMessage], [], value)
-      return
-    }
-
-    const seedContext = inferContextFromPrompt(value, applyFieldValue(context, selectedField, value))
+    const seedContext = sanitizeChecklistContext(inferContextFromPrompt(value, applyFieldValue(context, selectedField, value)))
     setContext(seedContext)
-    setActiveField(nextMissingField(seedContext) ?? 'intent')
-
-    if (capturedCount(seedContext) >= 5) {
-      deliverAssistantReply(buildSummaryAssistantMessage(seedContext), { delayMs: 0 })
-      return
-    }
+    setActiveField(currentRequiredField(seedContext))
 
     void processChatTurn(value, { seedContext, skipUserMessage: true, allowWhilePending: true })
+  }
+
+  function focusChecklistField(field: FieldKey) {
+    if (field === 'whereTo' && context.whereTo) {
+      setChecklistExpanded(false)
+      deliverAssistantReply({
+        id: nextId(),
+        role: 'assistant',
+        content: `This chat is locked to ${displayValue(context, 'whereTo')}. Tap + to start a new trip for a different destination.`,
+      })
+      return
+    }
+    if (!canFocusField(field, context)) {
+      const required = currentRequiredField(context)
+      const stepLabel = checklist.find((item) => item.key === required)?.label.toLowerCase() ?? 'the current step'
+      setActiveField(required)
+      setChecklistExpanded(false)
+      deliverAssistantReply({
+        id: nextId(),
+        role: 'assistant',
+        content: `Let's finish ${stepLabel} first — then we can move on.`,
+        suggestions: resolveSuggestions(required, [], context),
+        suggestionField: required,
+      })
+      return
+    }
+    setActiveField(field)
+    setChecklistExpanded(false)
+    deliverAssistantReply(focusPromptMessage(context, field), { delayMs: 0 })
   }
 
   function handleSummaryAction(value: string) {
@@ -1292,7 +1552,14 @@ export function PlannerPanel({ compact = false }: { compact?: boolean }) {
   }
 
   function startGeneration(userText?: string) {
-    const finalContext = context.whereFrom ? context : { ...context, whereFrom: 'Singapore' }
+    if (!isValidCapturedValue('whereFrom', context.whereFrom)) {
+      const required = 'whereFrom'
+      setActiveField(required)
+      setStage('collecting')
+      deliverAssistantReply(focusPromptMessage(context, required), { delayMs: 0 })
+      return
+    }
+    const finalContext = context
     setContext(finalContext)
     setChecklistExpanded(false)
     if (userText) {
@@ -1332,6 +1599,28 @@ export function PlannerPanel({ compact = false }: { compact?: boolean }) {
     return () => window.cancelAnimationFrame(frame)
   }, [assistantTyping, checklistExpanded, messages.length])
 
+  function getChatLogExport(): ChatLogExport {
+    return {
+      exportedAt: new Date().toISOString(),
+      stage,
+      activeField,
+      context,
+      messages,
+      toolTrace,
+      lastTrip,
+      flags: {
+        assistantTyping,
+        agentPending: runAgent.isPending,
+        chatPending: runChat.isPending,
+      },
+      meta: {
+        messageCount: messages.length,
+        url: window.location.href,
+        userAgent: navigator.userAgent,
+      },
+    }
+  }
+
   if (compact) {
     return (
       <section className="layla-v2-route home-route">
@@ -1346,7 +1635,7 @@ export function PlannerPanel({ compact = false }: { compact?: boolean }) {
   return (
     <section className="layla-v2-route chat">
       <div className="layla-phone-frame chat">
-        <LaylaTopBar onNewTrip={resetChat} onBack={() => navigate({ to: '/' })} />
+        <LaylaTopBar onNewTrip={resetChat} onBack={() => navigate({ to: '/' })} getChatLogExport={getChatLogExport} />
         {stage === 'generating' || stage === 'ready' ? (
           <GenerationScreen
             context={context}
@@ -1360,7 +1649,9 @@ export function PlannerPanel({ compact = false }: { compact?: boolean }) {
           <div className="layla-chat-screen">
             <div className={`trip-checklist-panel${checklistExpanded ? ' is-expanded' : ''}`}>
               <TripChecklistBar context={context} expanded={checklistExpanded} onToggle={() => setChecklistExpanded((value) => !value)} />
-              {checklistExpanded ? <TripChecklistSheet context={context} /> : null}
+              {checklistExpanded ? (
+                <TripChecklistSheet context={context} focusField={activeField} onFocusField={focusChecklistField} />
+              ) : null}
             </div>
 
             <div className="layla-chat-body">

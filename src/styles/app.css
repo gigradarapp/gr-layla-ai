@@ -2072,6 +2072,64 @@ td strong {
   cursor: pointer;
 }
 
+.layla-chat-export {
+  position: relative;
+}
+
+.layla-chat-export-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 80;
+  display: grid;
+  min-width: 188px;
+  padding: 6px;
+  background: #ffffff;
+  border: 1px solid #ece7ef;
+  border-radius: 14px;
+  box-shadow: 0 16px 36px rgba(35, 22, 43, 0.14);
+}
+
+.layla-chat-export-menu button {
+  display: inline-flex;
+  width: 100%;
+  height: auto;
+  min-height: 40px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  color: #2b1631;
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  box-shadow: none;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.layla-chat-export-menu button:hover {
+  background: #f6f1fa;
+}
+
+.layla-chat-export-notice {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 81;
+  width: max-content;
+  max-width: min(240px, 70vw);
+  margin: 0;
+  padding: 8px 12px;
+  color: #ffffff;
+  background: rgba(43, 22, 49, 0.92);
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
 .layla-home-screen {
   display: flex;
   width: 100%;
@@ -3530,10 +3588,34 @@ td strong {
 .checklist-step {
   position: relative;
   display: grid;
+  width: 100%;
   grid-template-columns: 30px 1fr;
   gap: 12px;
   min-height: 58px;
-  padding-bottom: 4px;
+  padding: 0 0 4px;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+}
+
+.checklist-step.is-interactive {
+  cursor: pointer;
+  border-radius: 12px;
+}
+
+.checklist-step.is-interactive:hover {
+  background: rgba(44, 23, 51, 0.04);
+}
+
+.checklist-step.is-focus.is-interactive {
+  background: rgba(200, 173, 255, 0.22);
+}
+
+.checklist-step.is-locked,
+.checklist-step.is-gated {
+  cursor: default;
+  opacity: 0.72;
 }
 
 .checklist-step::after {
@@ -3840,6 +3922,24 @@ td strong {
   font-weight: 700;
 }
 
+.layla-message-chips button.is-activity-done {
+  color: #ffffff;
+  background: linear-gradient(180deg, #3a8f68 0%, #2f7656 100%);
+  border-color: #2f7656;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.2) inset;
+  font-weight: 750;
+}
+
+.layla-message-chips button.is-activity-done:hover {
+  background: linear-gradient(180deg, #349f71 0%, #2a6b4d 100%);
+}
+
+.layla-message-chips.is-archived button.is-activity-done {
+  color: #ffffff;
+  background: #3a8f68;
+  border-color: #3a8f68;
+}
+
 .layla-message-chips.is-summary {
   margin-top: 0;
 }
@@ -3882,7 +3982,7 @@ td strong {
   flex: 1;
   min-height: 0;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   padding: 26px 30px max(34px, env(safe-area-inset-bottom, 0px));
   overflow-x: hidden;
   overflow-y: auto;
@@ -3902,17 +4002,24 @@ td strong {
 }
 
 .generation-card-stack {
-  position: relative;
-  width: 100%;
-  height: 180px;
-  margin-bottom: 36px;
+  display: flex;
+  width: min(360px, 100%);
+  min-height: 168px;
+  align-items: flex-end;
+  justify-content: center;
+  flex: 0 0 auto;
+  align-self: center;
+  margin: 0 auto 36px;
+  padding: 8px 0 0;
 }
 
 .gen-card {
-  position: absolute;
-  top: 8px;
-  width: 86px;
+  display: block;
+  position: relative;
+  flex: 0 0 clamp(64px, 22vw, 86px);
+  width: clamp(64px, 22vw, 86px);
   height: 150px;
+  margin-left: clamp(-20px, -5vw, -12px);
   overflow: hidden;
   background: #f8f7f3;
   background-image: url("https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=640&q=80");
@@ -3922,35 +4029,43 @@ td strong {
   box-shadow: 0 14px 24px rgba(43, 24, 52, 0.18);
 }
 
+.gen-card:first-child {
+  margin-left: 0;
+}
+
 .card-one {
-  left: 0;
+  z-index: 1;
   transform: rotate(-8deg);
   background-position: left center;
 }
 
 .card-two {
-  left: 89px;
+  z-index: 2;
+  margin-top: 6px;
+  transform: rotate(-2deg);
   background-color: #5e3b99;
   background-position: 35% center;
 }
 
 .card-three {
-  right: 88px;
+  z-index: 3;
+  margin-top: 2px;
   transform: rotate(5deg);
   background-color: #b292f6;
   background-position: 65% center;
 }
 
 .card-four {
-  right: 0;
+  z-index: 4;
   transform: rotate(-7deg);
   background-position: right center;
 }
 
 .generation-steps-v2 {
   display: grid;
-  width: 100%;
+  width: min(360px, 100%);
   gap: 20px;
+  align-self: center;
 }
 
 .generation-row {
@@ -3982,14 +4097,16 @@ td strong {
   align-items: center;
   justify-content: center;
   gap: 8px;
+  width: min(360px, 100%);
   min-height: 42px;
-  margin-top: auto;
+  margin-top: 32px;
+  align-self: center;
   color: #2c1733;
   font-weight: 850;
 }
 
 .generation-open-trip {
-  width: 100%;
+  width: min(360px, 100%);
   color: #ffffff;
   background: #2d1634;
   border: 0;

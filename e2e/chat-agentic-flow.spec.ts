@@ -67,6 +67,9 @@ test.describe('Layla chat — agentic UI flow (mocked API)', () => {
     await composer.fill('plan a trip to johor bahru')
     await page.getByRole('button', { name: 'Send message' }).click()
 
+    await expect(page.getByText(/setting off from|where are you setting off/i)).toBeVisible({ timeout: 20_000 })
+    await page.getByRole('button', { name: 'Singapore' }).click()
+
     await expect(page.getByText(/weekend window|when would you like to go/i)).toBeVisible({ timeout: 20_000 })
 
     const datePill = page.getByRole('button', { name: 'Fri 29 May – Sun 31 May' })
@@ -80,7 +83,6 @@ test.describe('Layla chat — agentic UI flow (mocked API)', () => {
     await expect(page.getByText(/what should this trip feel like/i)).toBeVisible({ timeout: 10_000 })
     await page.getByRole('button', { name: 'Eat & café-hop' }).click()
 
-    // JB trips infer Singapore as origin once who/when/intent are set — summary is shown without a whereFrom turn.
     await expect(page.getByText(/plan so far/i)).toBeVisible({ timeout: 10_000 })
     await expect(page.getByRole('button', { name: 'Confirm summary' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Change dates' })).toBeVisible()
