@@ -3587,6 +3587,40 @@ td strong {
   font-weight: 650;
 }
 
+.step-activity-count {
+  margin-left: 6px;
+  padding: 2px 7px;
+  color: #6f6472;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  background: #f3eef6;
+  border-radius: 999px;
+}
+
+.checklist-activity-block {
+  margin-top: 8px;
+}
+
+.checklist-activity-hint {
+  margin: 0;
+  color: #8c8490;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.checklist-activity-subitems {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: #4f4654;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.checklist-activity-subitems li + li {
+  margin-top: 4px;
+}
+
 .layla-chat-scroll {
   display: flex;
   flex: 1 0 auto;
@@ -3748,65 +3782,75 @@ td strong {
   font-weight: 700;
 }
 
+.layla-message.assistant {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
 .layla-message-chips {
   position: relative;
   z-index: 4;
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  max-width: 100%;
-  margin-top: 8px;
+  flex-wrap: nowrap;
+  gap: 10px;
+  width: 100%;
+  margin-top: 2px;
+  padding-bottom: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
   pointer-events: auto;
-  touch-action: manipulation;
+  touch-action: pan-x;
 }
 
-.layla-message-chips.is-active {
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  scrollbar-width: none;
-  padding-bottom: 2px;
+.layla-message-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.layla-message-chips.is-archived {
+  flex-wrap: wrap;
+  overflow-x: visible;
 }
 
 .layla-message-chips button {
-  position: relative;
-  z-index: 1;
+  flex: 0 0 auto;
   min-height: 36px;
-  padding: 0 14px;
+  padding: 8px 14px;
   color: #2a1830;
+  white-space: nowrap;
   background: #ffffff;
   border: 1px solid #ded9e1;
   border-radius: 999px;
-  box-shadow: 0 4px 12px rgba(42, 27, 48, 0.08);
+  box-shadow: none;
   cursor: pointer;
   font-size: 13px;
-  font-weight: 750;
+  font-weight: 700;
+  line-height: 1.2;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
 
-.layla-message-chips.is-active button.is-suggest-more {
+.layla-message-chips button.is-suggest-more {
   color: #5c3f6d;
   background: #faf7fc;
   border-style: dashed;
   border-color: #c9b8d4;
-  box-shadow: none;
   font-weight: 700;
 }
 
 .layla-message-chips.is-summary {
-  margin-top: 12px;
-  padding-top: 2px;
+  margin-top: 0;
 }
 
-.layla-message-chips:not(.is-active) button {
+.layla-message-chips.is-archived button {
   min-height: 32px;
-  padding: 0 12px;
+  padding: 6px 12px;
   color: #4f3d59;
   background: #f8f5fa;
-  border: 1px solid #e3dbe8;
-  box-shadow: none;
+  border-color: #e3dbe8;
   font-size: 12px;
-  font-weight: 700;
 }
 
 .layla-message-chips button:disabled {
@@ -3823,6 +3867,12 @@ td strong {
   padding: 8px 12px 12px;
   background: #ffffff;
   border-top: 1px solid #f0edf3;
+  pointer-events: auto;
+}
+
+.layla-chat-footer .layla-composer-v2,
+.layla-chat-footer .layla-composer-actions,
+.layla-chat-footer .layla-send {
   pointer-events: auto;
 }
 

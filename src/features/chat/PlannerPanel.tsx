@@ -39,12 +39,15 @@ type ChatMessage = {
   summaryActions?: boolean
 }
 
+const MAX_TRIP_ACTIVITIES = 5
+
 type TripContext = {
   whereTo: string
   whereFrom: string
   who: string
   when: string
   intent: string
+  activities: string[]
   budgetLevel: string
   pace: string
 }
@@ -55,8 +58,91 @@ const emptyContext: TripContext = {
   who: '',
   when: '',
   intent: '',
+  activities: [],
   budgetLevel: 'mid',
   pace: 'balanced',
+}
+
+function normalizeActivityLabel(value: string) {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function ensureActivitiesFromIntent(context: TripContext): TripContext {
+  if (context.activities.length > 0 || !context.intent) return context
+  return { ...context, activities: [context.intent] }
+}
+
+function activitySlotsMessage(context: TripContext) {
+  const ctx = ensureActivitiesFromIntent(context)
+  const left = Math.max(0, MAX_TRIP_ACTIVITIES - ctx.activities.length)
+  if (left === 0) {
+    return `You've reached the ${MAX_TRIP_ACTIVITIES}-activity limit for this trip.`
+  }
+  return `You can add up to ${MAX_TRIP_ACTIVITIES} — stop whenever you're happy (${ctx.activities.length} picked, ${left} slot${left === 1 ? '' : 's'} left).`
+}
+
+function pickActivityOptions(context: TripContext, messages: ChatMessage[], fromModel: string[] = []) {
+  const blocked = activityPickExclude(context, messages)
+  const options: string[] = []
+
+  for (const item of fromModel) {
+    if (isActivityFlowLabel(item)) continue
+    const lower = item.toLowerCase()
+    if (blocked.has(lower)) continue
+    if (!options.some((option) => option.toLowerCase() === lower)) options.push(item)
+    if (options.length >= ACTIVITY_PICK_COUNT) break
+  }
+
+  for (const item of intentActivityPool) {
+    if (options.length >= ACTIVITY_PICK_COUNT) break
+    if (blocked.has(item.toLowerCase())) continue
+    if (!options.some((option) => option.toLowerCase() === item.toLowerCase())) options.push(item)
+  }
+
+  return options
+}
+
+function buildActivityPickerSuggestions(context: TripContext, activityOptions: string[]) {
+  const ctx = ensureActivitiesFromIntent(context)
+  const suggestions: string[] = [ACTIVITY_IM_GOOD_LABEL, ...activityOptions]
+  if (ctx.activities.length < MAX_TRIP_ACTIVITIES && activityOptions.length > 0) {
+    suggestions.push(ACTIVITY_ADD_MORE_LABEL)
+  }
+  return suggestions
+}
+
+function activityPickerIntro(context: TripContext, justAdded?: string) {
+  const ctx = ensureActivitiesFromIntent(context)
+  if (justAdded) {
+    return `Added "${justAdded}". ${activitySlotsMessage(ctx)} Pick another or tap "${ACTIVITY_IM_GOOD_LABEL}".`
+  }
+  return `Add what you'd like — tap "${ACTIVITY_IM_GOOD_LABEL}" when you're done. ${activitySlotsMessage(ctx)}`
+}
+
+function addTripActivity(
+  context: TripContext,
+  label: string,
+): { context: TripContext; added: boolean; reason?: 'duplicate' | 'max' | 'empty' } {
+  const clean = normalizeActivityLabel(label)
+  if (!clean) return { context, added: false, reason: 'empty' }
+
+  const base = ensureActivitiesFromIntent(context)
+  const exists = base.activities.some((item) => item.toLowerCase() === clean.toLowerCase())
+  if (exists) return { context: base, added: false, reason: 'duplicate' }
+
+  if (base.activities.length >= MAX_TRIP_ACTIVITIES) {
+    return { context: base, added: false, reason: 'max' }
+  }
+
+  const activities = [...base.activities, clean]
+  return {
+    context: {
+      ...base,
+      activities,
+      intent: base.intent || clean,
+    },
+    added: true,
+  }
 }
 
 const checklist: Array<{
@@ -75,6 +161,9 @@ const checklist: Array<{
 const captureOrder: FieldKey[] = ['whereTo', 'when', 'who', 'intent', 'whereFrom']
 
 const SUGGEST_MORE_LABEL = 'Suggest more recommendations...'
+const ACTIVITY_IM_GOOD_LABEL = "I'm good"
+const ACTIVITY_ADD_MORE_LABEL = 'Add more suggestions...'
+const ACTIVITY_PICK_COUNT = 3
 
 const fieldSuggestions: Record<Exclude<FieldKey, 'when'>, string[]> = {
   whereTo: ['Johor Bahru', 'Bali', 'Tokyo + Kyoto'],
@@ -83,8 +172,48 @@ const fieldSuggestions: Record<Exclude<FieldKey, 'when'>, string[]> = {
   intent: ['Relaxation and local activities', 'Cafe hopping', 'Food and shopping'],
 }
 
-function withSuggestMoreChip(suggestions: string[], field: FieldKey, summaryActions?: boolean) {
+const intentActivityPool = [
+  ...fieldSuggestions.intent,
+  'Culture & heritage',
+  'Night food crawl',
+  'Hidden local gems',
+  'Street food trail',
+  'Nature & parks',
+  'Shopping + markets',
+  'Eat & café-hop',
+]
+
+const activityFlowLabels = new Set([ACTIVITY_IM_GOOD_LABEL, ACTIVITY_ADD_MORE_LABEL, SUGGEST_MORE_LABEL])
+
+function isActivityFlowLabel(value: string) {
+  return activityFlowLabels.has(value)
+}
+
+function activityPickExclude(context: TripContext, messages: ChatMessage[]) {
+  const ctx = ensureActivitiesFromIntent(context)
+  const blocked = new Set<string>()
+  for (const item of [...ctx.activities, ctx.intent, ...collectExcludedSuggestions(messages, 'intent')]) {
+    if (item) blocked.add(item.toLowerCase())
+  }
+  return blocked
+}
+
+function isActivityRefinementContext(context: TripContext) {
+  return capturedCount(context) >= 5 && ensureActivitiesFromIntent(context).activities.length > 0
+}
+
+function withSuggestMoreChip(
+  suggestions: string[],
+  field: FieldKey,
+  summaryActions?: boolean,
+  context?: TripContext,
+) {
   if (summaryActions || field !== 'intent') return suggestions
+  const ctx = context ? ensureActivitiesFromIntent(context) : null
+  if (ctx && isActivityRefinementContext(ctx)) {
+    return suggestions.filter((suggestion) => suggestion !== SUGGEST_MORE_LABEL)
+  }
+  if (ctx && ctx.activities.length >= MAX_TRIP_ACTIVITIES) return suggestions.filter((s) => s !== SUGGEST_MORE_LABEL)
   const base = suggestions.filter((suggestion) => suggestion !== SUGGEST_MORE_LABEL)
   if (base.length === 0) return suggestions
   return [...base, SUGGEST_MORE_LABEL]
@@ -95,7 +224,7 @@ function collectExcludedSuggestions(messages: ChatMessage[], field: FieldKey) {
   for (const message of messages) {
     if (message.role !== 'assistant' || message.suggestionField !== field || !message.suggestions?.length) continue
     for (const suggestion of message.suggestions) {
-      if (suggestion !== SUGGEST_MORE_LABEL) excluded.add(suggestion)
+      if (!activityFlowLabels.has(suggestion)) excluded.add(suggestion)
     }
   }
   return [...excluded]
@@ -130,18 +259,33 @@ function assistantReplyDelay(content: string) {
 }
 
 function mergeTripContext(context: TripContext, patch: Partial<TripContext>): TripContext {
-  return {
+  const merged: TripContext = {
     whereTo: patch.whereTo || context.whereTo,
     whereFrom: patch.whereFrom || context.whereFrom,
     who: patch.who || context.who,
     when: patch.when || context.when,
     intent: patch.intent || context.intent,
+    activities: context.activities,
     budgetLevel: patch.budgetLevel || context.budgetLevel,
     pace: patch.pace || context.pace,
   }
+  if (patch.activities?.length) {
+    let next = merged
+    for (const activity of patch.activities) {
+      const result = addTripActivity(next, activity)
+      next = result.context
+    }
+    return next
+  }
+  return merged
 }
 
 const summaryActionSuggestions = ['Confirm summary', 'Change dates', 'Add more activities'] as const
+const summaryActionSet = new Set<string>(summaryActionSuggestions)
+
+function isSummarySuggestionSet(suggestions: string[]) {
+  return suggestions.length > 0 && suggestions.every((item) => summaryActionSet.has(item))
+}
 
 function buildSummaryAssistantMessage(context: TripContext): ChatMessage {
   return {
@@ -168,13 +312,17 @@ function forwardChecklistPrompt(merged: TripContext, nextField: FieldKey) {
 }
 
 function buildAssistantFromAgentResponse(result: AgentChatResponse, merged: TripContext): ChatMessage {
-  if (capturedCount(merged) >= 5 || result.shouldFinish) {
+  const keepCollecting =
+    result.suggestedReplies.length > 0 && !isSummarySuggestionSet(result.suggestedReplies)
+  if ((capturedCount(merged) >= 5 || result.shouldFinish) && !keepCollecting) {
     return buildSummaryAssistantMessage(merged)
   }
 
   const field = nextMissingField(merged) ?? result.activeField
-  const agentSuggestions = result.activeField === field ? result.suggestedReplies : []
-  const suggestions = resolveSuggestions(field, agentSuggestions, merged)
+  const suggestions =
+    result.mode === 'model' && result.suggestedReplies.length >= 2
+      ? withSuggestMoreChip(result.suggestedReplies.slice(0, 4), field, false, merged)
+      : resolveSuggestions(field, result.suggestedReplies, merged)
   const content = shouldReplaceDateClarification(merged, result.assistantMessage, field)
     ? forwardChecklistPrompt(merged, field)
     : result.assistantMessage
@@ -264,7 +412,7 @@ function applyFieldValue(context: TripContext, key: FieldKey, value: string): Tr
   if (key === 'whereFrom') return { ...context, whereFrom: value }
   if (key === 'who') return { ...context, who: normalizeWho(value) }
   if (key === 'when') return { ...context, when: normalizeWhen(value, context.when) }
-  return { ...context, intent: value }
+  return addTripActivity({ ...context, intent: value }, value).context
 }
 
 function inferContextFromPrompt(prompt: string, current: TripContext): TripContext {
@@ -300,76 +448,57 @@ function inferContextFromPrompt(prompt: string, current: TripContext): TripConte
 }
 
 function summaryPrompt(context: TripContext) {
+  const ctx = ensureActivitiesFromIntent(context)
+  const activityLine =
+    ctx.activities.length > 0
+      ? `Activities (${ctx.activities.length}/${MAX_TRIP_ACTIVITIES}): ${ctx.activities.join(' · ')}`
+      : `Purpose: ${ctx.intent || 'Relaxation and local activities'}`
+
   return [
     `Route: ${context.whereFrom || 'Singapore'} -> ${displayValue(context, 'whereTo') || 'Johor Bahru'} (via Land)`,
     `Dates: ${context.when || 'Dates to confirm'}`,
     `Style: ${context.who || 'Solo'}, ${context.budgetLevel === 'budget' ? 'Budget-friendly (~50 SGD/night)' : 'Flexible budget'}`,
-    `Purpose: ${context.intent || 'Relaxation and local activities'}`,
+    activityLine,
   ]
 }
 
 function composePlanPrompt(context: TripContext) {
+  const ctx = ensureActivitiesFromIntent(context)
+  const activityFocus =
+    ctx.activities.length > 0
+      ? ctx.activities.join('; ')
+      : ctx.intent || 'relaxation and local activities'
+
   return `Plan a ${context.who || 'solo'} ${displayValue(context, 'whereTo') || 'Johor Bahru'} trip from ${
     context.whereFrom || 'Singapore'
-  }. Dates: ${context.when || 'flexible dates'}. Purpose: ${
-    context.intent || 'relaxation and local activities'
-  }. Budget level: ${context.budgetLevel || 'mid'}. Build it as a realistic dream itinerary with route, stay, local activities, and booking-style handoff.`
+  }. Dates: ${context.when || 'flexible dates'}. Trip activities (max ${MAX_TRIP_ACTIVITIES}): ${activityFocus}. Budget level: ${
+    context.budgetLevel || 'mid'
+  }. Build it as a realistic dream itinerary with route, stay, local activities, and booking-style handoff.`
 }
 
-function assistantTurn(context: TripContext, previous: TripContext, userText: string): ChatMessage {
-  const captured = capturedCount(context)
-  const capturedDelta = captured - capturedCount(previous)
-  const activeField = nextMissingField(context) ?? 'intent'
-  const lower = userText.toLowerCase()
-  const justCapturedDestination = !previous.whereTo && context.whereTo
-
-  if (captured >= 5) {
+function fallbackAssistantMessage(context: TripContext, userText?: string): ChatMessage {
+  if (capturedCount(context) >= 5) {
+    if (userText && /more activit|more ideas|more recommend/i.test(userText.toLowerCase())) {
+      return {
+        id: nextId(),
+        role: 'assistant',
+        content: 'Here are a few more ideas:',
+        suggestions: withSuggestMoreChip(resolveSuggestions('intent', [], context), 'intent', false, context),
+        suggestionField: 'intent',
+      }
+    }
     return buildSummaryAssistantMessage(context)
   }
 
-  if (justCapturedDestination) {
-    return {
-      id: nextId(),
-      role: 'assistant',
-      content:
-        "Johor Bahru! A classic getaway. Whether you're there for the food, the shopping, or to let the kids run wild at Legoland, we'll make it happen.\nTo get us started:\n\n• When are you thinking of heading over?\n• Who is joining the expedition?\n• How long do you want to escape for?",
-      suggestions: recommendWhenWindows(context),
-      suggestionField: 'when',
-    }
-  }
-
-  if (activeField === 'who') {
-    return {
-      id: nextId(),
-      role: 'assistant',
-      content:
-        "Decisions, decisions! Both are great, but let's narrow it down. Since you're likely coming from Singapore, are you planning a quick solo escape, or is this a family affair? Also, are we looking at a day trip or an overnight stay to really soak in the cafe culture?",
-      suggestions: ['This weekend', 'Next weekend', 'Solo trip'],
-      suggestionField: 'who',
-    }
-  }
-
-  if (activeField === 'intent' || lower.includes('overnight')) {
-    return {
-      id: nextId(),
-      role: 'assistant',
-      content:
-        capturedDelta > 1
-          ? "Nice, you answered a couple of checklist items at once. I now have Johor Bahru, a likely Singapore start, solo travel, and an overnight weekend shape. Last piece before I build the itinerary: what would make this trip feel like yours: cafes, shopping, food, relaxation, local activities, or a bit of everything?"
-          : "Perfect. I have Johor Bahru, a likely Singapore start, solo travel, and an overnight weekend shape. Last piece before I build the itinerary: what would make this trip feel like yours: cafes, shopping, food, relaxation, local activities, or a bit of everything?",
-      suggestions: ['Relaxation and local activities', 'Cafe hopping', 'Food and shopping'],
-      suggestionField: 'intent',
-    }
-  }
+  const field = nextMissingField(context) ?? 'intent'
+  const label = checklist.find((item) => item.key === field)?.label.toLowerCase() ?? 'the next detail'
 
   return {
     id: nextId(),
     role: 'assistant',
-    content: `Got it. I captured ${captured} of 5 essentials. Next I need ${checklist
-      .find((item) => item.key === activeField)
-      ?.label.toLowerCase()}.`,
-    suggestions: resolveSuggestions(activeField, [], context),
-    suggestionField: activeField,
+    content: `Got it — I still need ${label} before I can build your trip card.`,
+    suggestions: resolveSuggestions(field, [], context),
+    suggestionField: field,
   }
 }
 
@@ -449,15 +578,35 @@ function TripChecklistSheet({ context }: { context: TripContext }) {
         {checklist.map((item) => {
           const Icon = item.icon
           const value = displayValue(context, item.key)
+          const ctx = ensureActivitiesFromIntent(context)
+          const activityItems = item.key === 'intent' ? ctx.activities : []
+          const done = Boolean(value) || (item.key === 'intent' && activityItems.length > 0)
           return (
-            <div key={item.key} className={value ? 'checklist-step done' : 'checklist-step'}>
-              <span className="step-status">{value ? <Check size={16} /> : null}</span>
+            <div key={item.key} className={done ? 'checklist-step done' : 'checklist-step'}>
+              <span className="step-status">{done ? <Check size={16} /> : null}</span>
               <div>
                 <span className="step-label">
                   <Icon size={15} />
                   {item.label}
+                  {item.key === 'intent' ? (
+                    <span className="step-activity-count">
+                      {activityItems.length}/{MAX_TRIP_ACTIVITIES}
+                    </span>
+                  ) : null}
                 </span>
                 <strong>{value || item.empty}</strong>
+                {item.key === 'intent' ? (
+                  <div className="checklist-activity-block">
+                    <p className="checklist-activity-hint">{activitySlotsMessage(ctx)}</p>
+                    {activityItems.length > 0 ? (
+                      <ol className="checklist-activity-subitems">
+                        {activityItems.map((activity) => (
+                          <li key={activity}>{activity}</li>
+                        ))}
+                      </ol>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             </div>
           )
@@ -483,46 +632,44 @@ function ChatBubble({
   const chips = inlineSuggestions?.length ? inlineSuggestions : archivedSuggestions
   const chipsLabel = inlineSuggestions?.length ? 'Suggested replies' : 'Earlier suggestions'
 
+  const chipRowClass = message.summaryActions
+    ? 'layla-message-chips is-active is-summary'
+    : inlineSuggestions?.length
+      ? 'layla-message-chips is-active'
+      : 'layla-message-chips is-archived'
+
   return (
     <div className={`layla-message ${message.role}`}>
       <div className="layla-message-stack">
         <div className="layla-bubble">{message.content}</div>
-        {chips && chips.length > 0 ? (
-          <div
-            className={
-              message.summaryActions
-                ? 'layla-message-chips is-active is-summary'
-                : inlineSuggestions?.length
-                  ? 'layla-message-chips is-active'
-                  : 'layla-message-chips'
-            }
-            role="group"
-            aria-label={chipsLabel}
-          >
-            {chips.map((suggestion) => (
-              <button
-                key={`${message.id}-${suggestion}`}
-                type="button"
-                className={suggestion === SUGGEST_MORE_LABEL ? 'is-suggest-more' : undefined}
-                disabled={suggestionsDisabled}
-                onPointerDown={(event) => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  if (suggestionsDisabled) return
-                  onSuggestionClick?.(suggestion, message.suggestionField)
-                }}
-              >
-                {suggestion}
-              </button>
-            ))}
-          </div>
-        ) : null}
         {message.role === 'user' ? (
           <button type="button" className="copy-message" aria-label="Copy message">
             <Copy size={15} />
           </button>
         ) : null}
       </div>
+      {chips && chips.length > 0 ? (
+        <div className={chipRowClass} role="group" aria-label={chipsLabel}>
+          {chips.map((suggestion) => (
+            <button
+              key={`${message.id}-${suggestion}`}
+              type="button"
+              className={
+                suggestion === SUGGEST_MORE_LABEL || suggestion === ACTIVITY_ADD_MORE_LABEL ? 'is-suggest-more' : undefined
+              }
+              disabled={suggestionsDisabled}
+              onPointerDown={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                if (suggestionsDisabled) return
+                onSuggestionClick?.(suggestion, message.suggestionField)
+              }}
+            >
+              {suggestion}
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -549,7 +696,10 @@ function StickyComposer({
         aria-label="Ask Layla anything"
         rows={home ? 4 : 1}
         onKeyDown={(event) => {
-          if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) onSubmit()
+          if (event.key !== 'Enter' || event.nativeEvent.isComposing) return
+          if (event.shiftKey) return
+          event.preventDefault()
+          onSubmit()
         }}
       />
       <div className="layla-composer-actions">
@@ -786,7 +936,7 @@ export function PlannerPanel({ compact = false }: { compact?: boolean }) {
     } catch {
       const nextContext = inferContextFromPrompt(userText, previousContext)
       setContext(nextContext)
-      const assistant = assistantTurn(nextContext, previousContext, userText)
+      const assistant = fallbackAssistantMessage(nextContext, userText)
       setActiveField(nextMissingField(nextContext) ?? assistant.suggestionField ?? 'intent')
       if (capturedCount(nextContext) >= 5) setChecklistExpanded(false)
       deliverAssistantReply(assistant)
@@ -810,14 +960,116 @@ export function PlannerPanel({ compact = false }: { compact?: boolean }) {
     const fromMessage =
       latest?.suggestionField === field || (!missingField && latest?.suggestionField) ? (latest?.suggestions ?? []) : []
     const resolved = resolveSuggestions(field, fromMessage, context)
-    return withSuggestMoreChip(resolved, field, latest?.summaryActions)
+    return withSuggestMoreChip(resolved, field, latest?.summaryActions, context)
   }, [activeField, context, latestAssistantWithSuggestions])
 
-  async function requestMoreSuggestions(field: FieldKey) {
+  function deliverActivityLimitReply(contextForReply: TripContext) {
+    const ctx = ensureActivitiesFromIntent(contextForReply)
+    deliverAssistantReply({
+      id: nextId(),
+      role: 'assistant',
+      content: `${activitySlotsMessage(ctx)} Confirm the summary when you're ready, or change dates if you want to adjust the trip window.`,
+      suggestions: [...summaryActionSuggestions],
+      summaryActions: true,
+    })
+  }
+
+  function isActivityRefinementFlow(ctx: TripContext) {
+    return isActivityRefinementContext(ctx)
+  }
+
+  function deliverActivityPicker(
+    seedContext: TripContext,
+    transcript: ChatMessage[],
+    fromModel: string[] = [],
+    justAdded?: string,
+  ) {
+    const options = pickActivityOptions(seedContext, transcript, fromModel)
+    setActiveField('intent')
+
+    if (options.length === 0) {
+      if (ensureActivitiesFromIntent(seedContext).activities.length >= MAX_TRIP_ACTIVITIES) {
+        deliverActivityLimitReply(seedContext)
+        return
+      }
+      deliverAssistantReply({
+        id: nextId(),
+        role: 'assistant',
+        content: `I don't have fresh ideas left — ${activitySlotsMessage(seedContext)} Tap "${ACTIVITY_IM_GOOD_LABEL}" when you're ready.`,
+        suggestions: [ACTIVITY_IM_GOOD_LABEL],
+        suggestionField: 'intent',
+      })
+      return
+    }
+
+    deliverAssistantReply(
+      {
+        id: nextId(),
+        role: 'assistant',
+        content: activityPickerIntro(seedContext, justAdded),
+        suggestions: buildActivityPickerSuggestions(seedContext, options),
+        suggestionField: 'intent',
+      },
+      { delayMs: 0 },
+    )
+  }
+
+  async function offerNextActivityPick(options?: { userLabel?: string }) {
     if (assistantTyping || runChat.isPending || runAgent.isPending) return
 
-    const exclude = collectExcludedSuggestions(messages, field)
-    const userMessage: ChatMessage = { id: nextId(), role: 'user', content: SUGGEST_MORE_LABEL }
+    const ctx = ensureActivitiesFromIntent(context)
+    if (ctx.activities.length >= MAX_TRIP_ACTIVITIES) {
+      deliverActivityLimitReply(ctx)
+      return
+    }
+
+    const userLabel = options?.userLabel ?? ACTIVITY_ADD_MORE_LABEL
+    const userMessage: ChatMessage = { id: nextId(), role: 'user', content: userLabel }
+    const nextMessages = [...messages, userMessage]
+    setMessages(nextMessages)
+    setAssistantTyping(true)
+
+    const exclude = [...collectExcludedSuggestions(nextMessages, 'intent'), ...ctx.activities, ...(ctx.intent ? [ctx.intent] : [])]
+    const history = nextMessages
+      .filter((message): message is ChatMessage & { role: 'user' | 'assistant' } => message.role === 'user' || message.role === 'assistant')
+      .slice(-8)
+      .map((message) => ({ role: message.role, content: message.content }))
+
+    let fromModel: string[] = []
+
+    try {
+      const result = await runChat.mutateAsync({
+        message: userLabel,
+        context,
+        history,
+        moreSuggestions: { field: 'intent', exclude },
+      })
+      setToolTrace(result.trace)
+      fromModel = result.suggestedReplies.filter((suggestion) => !isActivityFlowLabel(suggestion))
+    } catch {
+      // local pool fallback
+    }
+
+    setContext(context)
+    deliverActivityPicker(ctx, nextMessages, fromModel)
+  }
+
+  async function requestMoreSuggestions(field: FieldKey, options?: { userLabel?: string }) {
+    if (assistantTyping || runChat.isPending || runAgent.isPending) return
+
+    if (field === 'intent' && isActivityRefinementFlow(context)) {
+      await offerNextActivityPick(options)
+      return
+    }
+
+    const ctx = ensureActivitiesFromIntent(context)
+    const userLabel = options?.userLabel ?? SUGGEST_MORE_LABEL
+    const exclude = [
+      ...collectExcludedSuggestions(messages, field),
+      ...ctx.activities,
+      ...(ctx.intent ? [ctx.intent] : []),
+    ]
+    const userMessage: ChatMessage = { id: nextId(), role: 'user', content: userLabel }
     const nextMessages = [...messages, userMessage]
 
     setMessages(nextMessages)
@@ -830,25 +1082,37 @@ export function PlannerPanel({ compact = false }: { compact?: boolean }) {
 
     try {
       const result = await runChat.mutateAsync({
-        message: SUGGEST_MORE_LABEL,
+        message: userLabel,
         context,
         history,
         moreSuggestions: { field, exclude },
       })
       setToolTrace(result.trace)
-      const suggestions = resolveSuggestions(field, result.suggestedReplies, context)
+      setActiveField(field)
+      const suggestions = withSuggestMoreChip(
+        resolveSuggestions(field, result.suggestedReplies, context).filter((suggestion) => !exclude.includes(suggestion)),
+        field,
+        false,
+        context,
+      )
+      const leadIn = result.assistantMessage || 'Here are a few more ideas:'
       deliverAssistantReply(
         {
           id: nextId(),
           role: 'assistant',
-          content: result.assistantMessage || 'Here are a few more ideas:',
+          content: leadIn,
           suggestions,
           suggestionField: field,
         },
         { delayMs: result.mode === 'model' ? 0 : undefined },
       )
     } catch {
-      const suggestions = resolveSuggestions(field, [], context).filter((suggestion) => !exclude.includes(suggestion))
+      const suggestions = withSuggestMoreChip(
+        resolveSuggestions(field, [], context).filter((suggestion) => !exclude.includes(suggestion)),
+        field,
+        false,
+        context,
+      )
       deliverAssistantReply({
         id: nextId(),
         role: 'assistant',
@@ -901,7 +1165,10 @@ export function PlannerPanel({ compact = false }: { compact?: boolean }) {
 
   function submitMessage() {
     const trimmed = input.trim()
-    if (!trimmed || runAgent.isPending || runChat.isPending || assistantTyping) return
+    if (!trimmed || runAgent.isPending) return
+
+    clearAssistantReplyTimer()
+    setAssistantTyping(false)
     if (progress >= 5 && isSummaryConfirmation(trimmed)) {
       setInput('')
       startGeneration(trimmed)
@@ -922,63 +1189,74 @@ export function PlannerPanel({ compact = false }: { compact?: boolean }) {
       setInput('')
       return
     }
-    void processChatTurn(trimmed)
     setInput('')
-  }
-
-  async function syncChatTurn(userText: string, seedContext: TripContext, transcript: ChatMessage[]) {
-    const history = transcript
-      .filter((message): message is ChatMessage & { role: 'user' | 'assistant' } => message.role === 'user' || message.role === 'assistant')
-      .slice(-8)
-      .map((message) => ({ role: message.role, content: message.content }))
-
-    try {
-      const result = await runChat.mutateAsync({
-        message: userText,
-        context: seedContext,
-        history,
-      })
-      const merged = mergeTripContext(
-        mergeTripContext(seedContext, result.contextPatch),
-        inferContextFromPrompt(userText, seedContext),
-      )
-      setContext(merged)
-      setToolTrace(result.trace)
-    } catch {
-      // Local pill flow already advanced the checklist.
-    }
+    void processChatTurn(trimmed, { allowWhilePending: true })
   }
 
   function chooseSuggestion(value: string, field?: FieldKey) {
     if (runAgent.isPending) return
+    if (value === ACTIVITY_IM_GOOD_LABEL) {
+      setMessages((current) => [...current, { id: nextId(), role: 'user', content: value }])
+      setChecklistExpanded(false)
+      deliverAssistantReply(buildSummaryAssistantMessage(context), { delayMs: 0 })
+      return
+    }
+    if (value === ACTIVITY_ADD_MORE_LABEL) {
+      void offerNextActivityPick({ userLabel: value })
+      return
+    }
     if (value === SUGGEST_MORE_LABEL) {
+      if (isActivityRefinementFlow(context)) {
+        void offerNextActivityPick({ userLabel: value })
+        return
+      }
       void requestMoreSuggestions(field ?? activeSuggestionField)
       return
     }
 
     const selectedField = field ?? activeSuggestionField
-    const previousContext = context
-    const seedContext = inferContextFromPrompt(value, applyFieldValue(previousContext, selectedField, value))
+    const prior = ensureActivitiesFromIntent(context)
+    const isAddingMoreActivity =
+      selectedField === 'intent' && capturedCount(context) >= 5 && prior.activities.length > 0
     const userMessage: ChatMessage = { id: nextId(), role: 'user', content: value }
-    const transcript = [...messages, userMessage]
 
-    setContext(seedContext)
-    setActiveField(nextMissingField(seedContext) ?? 'intent')
-    setMessages(transcript)
+    setMessages((current) => [...current, userMessage])
 
-    if (capturedCount(seedContext) >= 5) {
-      deliverAssistantReply(buildSummaryAssistantMessage(seedContext), { delayMs: 0 })
+    if (isAddingMoreActivity) {
+      const { context: withActivity, added, reason } = addTripActivity(prior, value)
+      const seedContext = inferContextFromPrompt(value, withActivity)
+      setContext(seedContext)
+
+      if (!added && reason === 'max') {
+        deliverActivityLimitReply(seedContext)
+        return
+      }
+      if (!added && reason === 'duplicate') {
+        deliverAssistantReply({
+          id: nextId(),
+          role: 'assistant',
+          content: `"${value}" is already on your list. ${activitySlotsMessage(seedContext)}`,
+          suggestions: [...summaryActionSuggestions],
+          summaryActions: true,
+        })
+        return
+      }
+
+      if (seedContext.activities.length >= MAX_TRIP_ACTIVITIES) {
+        deliverActivityLimitReply(seedContext)
+        return
+      }
+
+      deliverActivityPicker(seedContext, [...messages, userMessage], [], value)
       return
     }
 
-    const canAdvanceLocally =
-      Boolean(seedContext[selectedField]) &&
-      (selectedField === 'when' ? looksLikeDateWindow(value) || Boolean(seedContext.when) : true)
+    const seedContext = inferContextFromPrompt(value, applyFieldValue(context, selectedField, value))
+    setContext(seedContext)
+    setActiveField(nextMissingField(seedContext) ?? 'intent')
 
-    if (canAdvanceLocally) {
-      const assistant = assistantTurn(seedContext, previousContext, value)
-      deliverAssistantReply(assistant, { delayMs: 0 })
-      void syncChatTurn(value, seedContext, transcript)
+    if (capturedCount(seedContext) >= 5) {
+      deliverAssistantReply(buildSummaryAssistantMessage(seedContext), { delayMs: 0 })
       return
     }
 
@@ -1000,24 +1278,17 @@ export function PlannerPanel({ compact = false }: { compact?: boolean }) {
       return
     }
     if (value === 'Add more activities') {
-      deliverAssistantReply({
-        id: nextId(),
-        role: 'assistant',
-        content: 'Tell me what to add — cafes, shopping, nature, kid-friendly stops, or a mix — and I will fold it into the brief.',
-        suggestions: ['Cafe hopping', 'Food and shopping', 'Relaxation and local activities'],
-        suggestionField: 'intent',
-      })
+      const ctx = ensureActivitiesFromIntent(context)
+      setChecklistExpanded(false)
+      if (ctx.activities.length >= MAX_TRIP_ACTIVITIES) {
+        setMessages((current) => [...current, { id: nextId(), role: 'user', content: value }])
+        deliverActivityLimitReply(ctx)
+        return
+      }
+      void offerNextActivityPick({ userLabel: value })
       return
     }
-    setActiveField('intent')
-    setChecklistExpanded(false)
-    deliverAssistantReply({
-      id: nextId(),
-      role: 'assistant',
-      content: 'Add the vibe you want and I will fold it into the itinerary brief before generation.',
-      suggestions: ['Cafe hopping', 'Local food', 'Relaxing activities'],
-      suggestionField: 'intent',
-    })
+    void processChatTurn(value, { seedContext: context, allowWhilePending: true })
   }
 
   function startGeneration(userText?: string) {
@@ -1125,7 +1396,7 @@ export function PlannerPanel({ compact = false }: { compact?: boolean }) {
                     archivedSuggestions={archivedSuggestions}
                     suggestionsDisabled={runAgent.isPending}
                     onSuggestionClick={(value, suggestionField) => {
-                      if (message.summaryActions || latestAssistantWithSuggestions?.summaryActions) {
+                      if (message.summaryActions) {
                         handleSummaryAction(value)
                         return
                       }
@@ -1145,7 +1416,7 @@ export function PlannerPanel({ compact = false }: { compact?: boolean }) {
                 input={input}
                 setInput={setInput}
                 onSubmit={submitMessage}
-                disabled={runAgent.isPending || runChat.isPending || assistantTyping}
+                disabled={runAgent.isPending}
               />
             </div>
           </div>

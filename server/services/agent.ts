@@ -260,21 +260,51 @@ const fieldSuggestions: Record<Exclude<AgentChatTurn['activeField'], 'when'>, st
   intent: ['Relaxation and local activities', 'Cafe hopping', 'Food and shopping'],
 }
 
+const LAYLA_CHAT_SYSTEM_PROMPT = `You are Layla, a warm concise AI travel-agent. Your job is to guide the user through a 5-step trip checklist before any full itinerary is built.
+
+Checklist order (always ask for the first missing item only):
+1. whereTo — destination
+2. when — travel dates
+3. who — who is travelling
+4. intent — what they want from the trip
+5. whereFrom — where they depart from
+
+Rules:
+- Use capturedFields and missingFields from the request. Never re-ask or re-clarify a field already in capturedFields.
+- Acknowledge what the user just said in one short beat, then ask a natural question for the next missing field only.
+- activeField must equal the first missing field.
+- suggestedReplies must be 2-4 pills for activeField ONLY. Never mix fields (e.g. never offer date pills when asking who).
+- when: suggestedReplies must be specific calendar windows with real dates (e.g. "Sat 31 May – Sun 1 Jun") tailored to whereTo, who, today, and destinationHint. Mention your top pick briefly in assistantMessage.
+- who: traveler-type pills only (e.g. Solo, Couple, Family with kids, Friends).
+- intent: vibe pills tailored to the destination and traveler type.
+- whereFrom: plausible origin cities for the trip.
+- whereTo: use destinationInventory when relevant.
+- Keep assistantMessage under 70 words, one short paragraph, no canned scripts, no bullet lists unless the user asked multiple things.
+- Update contextPatch from the latest user message. Use empty strings for unknown fields.
+- Set shouldFinish true only when all 5 checklist fields are captured.
+- Do not produce a full day-by-day itinerary in collection chat.
+- Never pretend live prices are guaranteed.`
+
 function resolveSuggestedReplies(
   merged: Required<AgentContext>,
   activeField: AgentChatTurn['activeField'],
   turn: AgentChatTurn,
   shouldFinish: boolean,
+  preferModel = false,
 ) {
   if (shouldFinish) return []
+
+  if (preferModel && turn.suggestedReplies.length >= 2) {
+    return turn.suggestedReplies.slice(0, 4)
+  }
 
   if (activeField === 'when') {
     if (turn.suggestedReplies.length >= 2) return turn.suggestedReplies.slice(0, 4)
     return recommendWhenWindows(merged)
   }
 
-  if (turn.activeField === activeField && turn.suggestedReplies.length) {
-    return turn.suggestedReplies
+  if (turn.suggestedReplies.length >= 2) {
+    return turn.suggestedReplies.slice(0, 4)
   }
 
   return fieldSuggestions[activeField as Exclude<AgentChatTurn['activeField'], 'when'>] ?? []
@@ -289,13 +319,13 @@ function destinationHintForContext(context: AgentContext = {}) {
   )
 }
 
-function finalizeChatTurn(input: AgentChatRequest, turn: AgentChatTurn) {
+function finalizeChatTurn(input: AgentChatRequest, turn: AgentChatTurn, preferModel = false) {
   const combinedPatch = combineContextPatch(input.message, input.context, turn.contextPatch)
   const merged = mergedContext(input.context, combinedPatch) as Required<AgentContext>
   const activeField = nextField(merged)
   const captured = capturedFields(merged).length
   const shouldFinish = captured >= 5
-  const suggestions = resolveSuggestedReplies(merged, activeField, turn, shouldFinish)
+  const suggestions = resolveSuggestedReplies(merged, activeField, turn, shouldFinish, preferModel)
 
   return {
     assistantMessage: turn.assistantMessage,
@@ -432,7 +462,7 @@ async function callMoreSuggestionsModel(input: AgentChatRequest, trace: AgentTra
         {
           role: 'system',
           content:
-            'You are Layla, a warm concise AI travel-agent. The user tapped "Suggest more recommendations" — return ONLY fresh alternative pills for the requested field. Do not change captured checklist values. contextPatch must use empty strings for every field. assistantMessage is one short inviting line (under 20 words). suggestedReplies: exactly 3 options, max 42 chars each, must not repeat or paraphrase excluded options.',
+            'You are Layla, a warm concise AI travel-agent. The user is adding trip activities and may stop before 5. Return ONLY fresh alternative pills for the requested field. Do not change captured checklist values. contextPatch must use empty strings for every field. assistantMessage is one short inviting line (under 20 words). For intent/activities: suggestedReplies must contain exactly 3 distinct options, max 42 chars each, must not repeat excluded options. For other fields: exactly 3 options.',
         },
         {
           role: 'user',
@@ -523,8 +553,7 @@ async function callChatModel(input: AgentChatRequest, trace: AgentTrace[]): Prom
       input: [
         {
           role: 'system',
-          content:
-            'You are Layla, a warm concise AI travel-agent. Collection chat must not produce a full itinerary; that only happens after the user confirms Finish. Keep assistantMessage under 70 words in one short paragraph. NEVER re-ask or re-clarify a checklist item that is already in capturedFields—acknowledge it briefly and ask only about the next missing field. Do not ask "Sat–Sun or Sun–Mon" if when is already captured. Update contextPatch with anything clearly stated in the latest user message. Set activeField to the first missing field. Return 1-4 short suggestedReplies for that activeField only. When activeField is "when", suggestedReplies MUST be 2-4 specific calendar windows with real dates (e.g. "Sat 31 May – Sun 1 Jun") tailored to whereTo, who, destinationSeason, and today—recommend the best windows in assistantMessage too; never use generic-only pills like "Next weekend" without dates. Never pretend live prices are guaranteed. Infer whereFrom as Singapore for Johor Bahru weekend trips from the region when plausible. Return JSON only.',
+          content: LAYLA_CHAT_SYSTEM_PROMPT,
         },
         {
           role: 'user',
@@ -537,8 +566,9 @@ async function callChatModel(input: AgentChatRequest, trace: AgentTrace[]): Prom
             destinationHint: destinationHintForContext(input.context),
             recentHistory: (input.history ?? []).slice(-8),
             destinationInventory: destinations,
+            checklistOrder: captureOrder,
             instruction:
-              'Infer only fields strongly supported by the message or inventory. Use empty strings for unknown contextPatch fields. If the user already answered a missing field in this message, fill contextPatch and move on. If asking about when, recommend concrete date windows in suggestedReplies.',
+              'Infer only fields strongly supported by the message or inventory. If the user already answered a missing field in this message, fill contextPatch and advance to the next missing field. Pills must match activeField only.',
           }),
         },
       ],
@@ -650,7 +680,7 @@ export async function runTravelChat(input: AgentChatRequest) {
 
   const modelTurn = await callChatModel(input, trace)
   const rawTurn = modelTurn ?? fallbackChat(input, trace)
-  const turn = finalizeChatTurn(input, rawTurn)
+  const turn = finalizeChatTurn(input, rawTurn, Boolean(modelTurn))
   const merged = mergedContext(input.context, turn.contextPatch)
   trace.push({
     name: 'update_checklist',

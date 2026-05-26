@@ -81,6 +81,7 @@ export const api = {
       who?: string
       when?: string
       intent?: string
+      activities?: string[]
       budgetLevel?: string
       pace?: string
     }
