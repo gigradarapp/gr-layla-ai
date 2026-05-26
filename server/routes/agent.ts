@@ -38,6 +38,12 @@ const agentChatSchema = z.object({
       }),
     )
     .optional(),
+  moreSuggestions: z
+    .object({
+      field: z.enum(['whereTo', 'whereFrom', 'who', 'when', 'intent']),
+      exclude: z.array(z.string()),
+    })
+    .optional(),
 })
 
 export function registerAgentRoutes(router: Router) {

@@ -85,6 +85,10 @@ export const api = {
       pace?: string
     }
     history: Array<{ role: 'user' | 'assistant'; content: string }>
+    moreSuggestions?: {
+      field: 'whereTo' | 'whereFrom' | 'who' | 'when' | 'intent'
+      exclude: string[]
+    }
   }) {
     return request<AgentChatResponse>('/api/agent/chat', {
       method: 'POST',

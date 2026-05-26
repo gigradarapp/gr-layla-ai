@@ -27,6 +27,10 @@
   box-sizing: border-box;
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   margin: 0;
   min-width: 320px;
@@ -1998,6 +2002,7 @@ td strong {
 }
 
 .layla-phone-frame.chat {
+  min-height: 0;
   background: #ffffff;
 }
 
@@ -2008,6 +2013,8 @@ td strong {
 }
 
 .layla-topbar {
+  position: relative;
+  z-index: 60;
   display: flex;
   min-height: 74px;
   align-items: center;
@@ -2017,12 +2024,33 @@ td strong {
   background: inherit;
 }
 
+.layla-topbar-start {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
 .layla-topbar strong {
   color: #2b1631;
   font-size: 25px;
   line-height: 1;
   font-weight: 950;
   letter-spacing: 0;
+}
+
+.layla-top-back {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: #201225;
+  background: rgba(255, 255, 255, 0.68);
+  border: 0;
+  border-radius: 50%;
+  box-shadow: 0 6px 16px rgba(35, 22, 43, 0.06);
+  cursor: pointer;
 }
 
 .layla-top-actions {
@@ -2217,18 +2245,42 @@ td strong {
 .see-help {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  margin-top: auto;
-  color: #241229;
+  gap: 6px;
+  margin-top: 32px;
+  color: #4a3d52;
+  text-decoration: none;
   background: transparent;
   border: 0;
   cursor: pointer;
-  font-weight: 850;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  transition: color 0.15s ease;
+}
+
+.see-help:hover {
+  color: #2b1730;
+}
+
+.see-help svg {
+  animation: see-help-nudge 1.8s ease-in-out infinite;
+}
+
+@keyframes see-help-nudge {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(5px);
+  }
 }
 
 .layla-help-section {
   width: 100%;
   padding: 38px 24px 44px;
+  scroll-margin-top: 20px;
   background: #ffffff;
   border-top: 1px solid #eeeaf0;
 }
@@ -2975,6 +3027,227 @@ td strong {
   cursor: pointer;
 }
 
+.share-feedback-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow-y: auto;
+  padding-top: 20svh;
+  background: rgba(53, 34, 59, 0.74);
+  backdrop-filter: blur(1px);
+}
+
+.share-feedback-sheet {
+  width: min(100vw, 430px);
+  min-height: 80svh;
+  overflow: hidden;
+  background: #ffffff;
+  border-radius: 18px 18px 0 0;
+  box-shadow: 0 -14px 42px rgba(43, 24, 52, 0.3);
+}
+
+.share-feedback-hero {
+  position: relative;
+  height: clamp(124px, 18svh, 190px);
+  overflow: hidden;
+  background: #ded9e1;
+}
+
+.share-feedback-hero img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.share-feedback-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  color: #26202a;
+  background: #ffffff;
+  border: 0;
+  border-radius: 50%;
+  box-shadow: 0 10px 22px rgba(43, 24, 52, 0.14);
+  cursor: pointer;
+}
+
+.share-feedback-body {
+  padding: 22px 18px 30px;
+}
+
+.share-feedback-body h2 {
+  max-width: 360px;
+  margin: 0;
+  color: #2b1730;
+  font-size: clamp(21px, 5.7vw, 32px);
+  line-height: 1.35;
+  font-weight: 950;
+}
+
+.share-feedback-body p {
+  max-width: 350px;
+  margin-top: 18px;
+  color: #877d8b;
+  font-size: clamp(15px, 4.2vw, 22px);
+  line-height: 1.35;
+  font-weight: 500;
+}
+
+.share-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 56px);
+  justify-content: space-between;
+  gap: 28px 0;
+  margin-top: 36px;
+}
+
+.share-brand {
+  position: relative;
+  display: grid;
+  width: 56px;
+  height: 56px;
+  place-items: center;
+  color: #ffffff;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: none;
+}
+
+.share-brand span {
+  color: inherit;
+  font-family: Arial, Helvetica, sans-serif;
+  font-weight: 900;
+}
+
+.share-brand.whatsapp {
+  background: #4bec68;
+}
+
+.share-brand.whatsapp svg:first-child {
+  stroke-width: 2.7;
+}
+
+.whatsapp-phone {
+  position: absolute;
+  top: 19px;
+  left: 19px;
+  color: #4bec68;
+  stroke: #ffffff;
+  stroke-width: 3.2;
+}
+
+.share-brand.facebook {
+  align-items: end;
+  overflow: hidden;
+  background: #2374f5;
+}
+
+.share-brand.facebook span {
+  margin-bottom: -12px;
+  font-size: 68px;
+  line-height: 0.9;
+}
+
+.share-brand.x-social {
+  background: #000000;
+}
+
+.share-brand.x-social span {
+  font-size: 36px;
+  line-height: 1;
+}
+
+.share-brand.messenger {
+  background: linear-gradient(135deg, #0d8bff 6%, #834cff 44%, #f5278d 74%, #ff5d3d 100%);
+}
+
+.messenger-mark {
+  width: 38px;
+  height: 30px;
+  background: #ffffff;
+  clip-path: polygon(0 85%, 38% 42%, 54% 59%, 100% 20%, 62% 79%, 45% 62%);
+}
+
+.share-brand.telegram {
+  background: #29aceb;
+}
+
+.share-brand.telegram svg {
+  margin: 0 4px 4px 0;
+  transform: rotate(-12deg);
+}
+
+.share-brand.email {
+  background: #858585;
+}
+
+.share-link-block {
+  margin-top: 36px;
+}
+
+.share-link-block > strong {
+  display: block;
+  color: #26202a;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.share-link-copy {
+  display: grid;
+  width: 100%;
+  min-height: 58px;
+  grid-template-columns: minmax(0, 1fr) 50px;
+  gap: 12px;
+  align-items: center;
+  margin-top: 24px;
+  padding: 7px 10px 7px 20px;
+  color: #26202a;
+  background: #fbfbfb;
+  border: 1px solid #e8e5e8;
+  border-radius: 18px;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(43, 24, 52, 0.02);
+}
+
+.share-link-copy span {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 18px;
+  line-height: 1.2;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-link-copy i {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  color: #26202a;
+  background: #f0efef;
+  border-radius: 13px;
+  font-style: normal;
+}
+
+.share-link-block small {
+  display: block;
+  min-height: 20px;
+  margin-top: 8px;
+  color: #7b51c7;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 @media (max-height: 720px) {
   .layla-map {
     height: 196px;
@@ -3046,24 +3319,79 @@ td strong {
   .trip-bottom-nav a {
     min-height: 48px;
   }
+
+  .share-feedback-overlay {
+    padding-top: 18svh;
+  }
+
+  .share-feedback-hero {
+    height: 124px;
+  }
+
+  .share-feedback-body {
+    padding: 22px 18px 28px;
+  }
+
+  .share-grid {
+    margin-top: 36px;
+  }
+
+  .share-link-block {
+    margin-top: 36px;
+  }
 }
 
 .layla-chat-screen {
+  position: relative;
   display: flex;
   min-height: 0;
   flex: 1;
   flex-direction: column;
+  overflow: hidden;
   background: #ffffff;
 }
 
+.trip-checklist-panel {
+  position: relative;
+  z-index: 20;
+  flex: 0 0 auto;
+  width: calc(100% - 22px);
+  margin: 0 11px 8px;
+}
+
+.trip-checklist-panel.is-expanded {
+  z-index: 30;
+}
+
+.layla-chat-body {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  pointer-events: auto;
+}
+
+.layla-chat-main {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
 .trip-checklist-bar-v2 {
-  position: sticky;
-  top: 0;
-  z-index: 4;
+  position: relative;
   display: grid;
   gap: 9px;
-  width: calc(100% - 22px);
-  margin: 0 11px 0;
+  width: 100%;
+  margin: 0;
   padding: 14px 20px 13px;
   text-align: left;
   background: #ffffff;
@@ -3071,6 +3399,22 @@ td strong {
   border-radius: 20px;
   box-shadow: 0 12px 24px rgba(42, 27, 48, 0.12);
   cursor: pointer;
+}
+
+.trip-checklist-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  padding: 0;
+  border: 0;
+  background: rgba(43, 24, 52, 0.14);
+  pointer-events: none;
+}
+
+.trip-checklist-panel.is-expanded .trip-checklist-bar-v2 {
+  border-bottom: 0;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
 }
 
 .trip-checklist-bar-v2 > div {
@@ -3114,15 +3458,26 @@ td strong {
 }
 
 .trip-checklist-sheet-v2 {
-  z-index: 3;
   display: grid;
-  gap: 26px;
-  margin: 0 12px 6px;
-  padding: 26px 18px 28px;
+  gap: 16px;
+  padding: 4px 16px 16px;
   background: #ffffff;
-  border: 1px solid #ebe7ed;
-  border-radius: 20px;
-  box-shadow: 0 16px 34px rgba(39, 26, 45, 0.14);
+}
+
+.trip-checklist-panel.is-expanded .trip-checklist-sheet-v2 {
+  position: absolute;
+  top: calc(100% - 1px);
+  right: 0;
+  left: 0;
+  z-index: 1;
+  max-height: min(38svh, 300px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid #eeeaf0;
+  border-top: 0;
+  border-radius: 0 0 20px 20px;
+  box-shadow: 0 18px 34px rgba(39, 26, 45, 0.16);
+  -webkit-overflow-scrolling: touch;
 }
 
 .checklist-sheet-head {
@@ -3156,8 +3511,8 @@ td strong {
 .checklist-sheet-head h2 {
   margin-top: 4px;
   color: #2c1733;
-  font-size: 24px;
-  line-height: 1.08;
+  font-size: 21px;
+  line-height: 1.12;
   font-weight: 950;
 }
 
@@ -3177,7 +3532,8 @@ td strong {
   display: grid;
   grid-template-columns: 30px 1fr;
   gap: 12px;
-  min-height: 70px;
+  min-height: 58px;
+  padding-bottom: 4px;
 }
 
 .checklist-step::after {
@@ -3233,19 +3589,18 @@ td strong {
 
 .layla-chat-scroll {
   display: flex;
-  min-height: 0;
-  flex: 1;
+  flex: 1 0 auto;
   flex-direction: column;
   gap: 20px;
-  overflow-y: auto;
-  padding: 18px 26px 14px;
+  padding: 4px 26px max(18px, env(safe-area-inset-bottom, 0px));
+  pointer-events: auto;
 }
 
 .layla-empty-chat {
   display: grid;
   gap: 8px;
-  margin: auto 0;
-  padding: 28px;
+  margin: 0;
+  padding: 28px 28px 40px;
   color: #8b8491;
   text-align: center;
 }
@@ -3294,6 +3649,46 @@ td strong {
   border-radius: 28px 28px 6px 28px;
 }
 
+.layla-typing-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 42px;
+  padding: 12px 16px;
+  background: #f3eff8;
+  border-radius: 22px 22px 22px 8px;
+}
+
+.layla-typing-indicator span {
+  width: 8px;
+  height: 8px;
+  background: #8d7a99;
+  border-radius: 50%;
+  animation: layla-typing-bounce 1.1s ease-in-out infinite;
+}
+
+.layla-typing-indicator span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.layla-typing-indicator span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes layla-typing-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+
+  30% {
+    transform: translateY(-5px);
+    opacity: 1;
+  }
+}
+
 .copy-message {
   display: grid;
   width: 24px;
@@ -3305,32 +3700,144 @@ td strong {
   cursor: pointer;
 }
 
+.layla-chat-suggestions {
+  position: relative;
+  z-index: 90;
+  flex: 0 0 auto;
+  padding: 4px 12px 6px;
+  background: #ffffff;
+  border-top: 1px solid #f3eff6;
+  pointer-events: auto;
+}
+
+.layla-suggestion-chips {
+  display: flex;
+  gap: 10px;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+  pointer-events: auto;
+}
+
+.layla-suggestion-chips button {
+  min-width: max-content;
+  min-height: 36px;
+  padding: 0 14px;
+  color: #2a1830;
+  background: #ffffff;
+  border: 1px solid #ded9e1;
+  border-radius: 999px;
+  box-shadow: 0 4px 12px rgba(42, 27, 48, 0.08);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 750;
+  pointer-events: auto;
+}
+
+.layla-suggestion-chips button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.layla-suggestion-chips button.is-suggest-more {
+  color: #5c3f6d;
+  background: #faf7fc;
+  border-style: dashed;
+  border-color: #c9b8d4;
+  box-shadow: none;
+  font-weight: 700;
+}
+
+.layla-message-chips {
+  position: relative;
+  z-index: 4;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: 100%;
+  margin-top: 8px;
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
+.layla-message-chips.is-active {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+
+.layla-message-chips button {
+  position: relative;
+  z-index: 1;
+  min-height: 36px;
+  padding: 0 14px;
+  color: #2a1830;
+  background: #ffffff;
+  border: 1px solid #ded9e1;
+  border-radius: 999px;
+  box-shadow: 0 4px 12px rgba(42, 27, 48, 0.08);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 750;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.layla-message-chips.is-active button.is-suggest-more {
+  color: #5c3f6d;
+  background: #faf7fc;
+  border-style: dashed;
+  border-color: #c9b8d4;
+  box-shadow: none;
+  font-weight: 700;
+}
+
+.layla-message-chips.is-summary {
+  margin-top: 12px;
+  padding-top: 2px;
+}
+
+.layla-message-chips:not(.is-active) button {
+  min-height: 32px;
+  padding: 0 12px;
+  color: #4f3d59;
+  background: #f8f5fa;
+  border: 1px solid #e3dbe8;
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.layla-message-chips button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .layla-chat-footer {
+  position: relative;
+  z-index: 100;
   display: grid;
   flex: 0 0 auto;
   gap: 10px;
   padding: 8px 12px 12px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0), #ffffff 22%);
-}
-
-.layla-footer-chips {
-  padding: 0 2px;
-}
-
-.layla-footer-chips button {
-  color: #817986;
   background: #ffffff;
-  border: 1px solid #ded9e1;
-  font-size: 12px;
-  font-weight: 750;
+  border-top: 1px solid #f0edf3;
+  pointer-events: auto;
 }
 
 .layla-generation-screen {
   display: flex;
+  width: 100%;
   flex: 1;
+  min-height: 0;
   flex-direction: column;
   align-items: center;
-  padding: 26px 30px 34px;
+  padding: 26px 30px max(34px, env(safe-area-inset-bottom, 0px));
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   background: #c8adff;
   color: #2c1733;
 }
@@ -3454,6 +3961,15 @@ td strong {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+
+  .see-help svg {
+    animation: none;
+  }
+
+  .layla-typing-indicator span {
+    animation: none;
+    opacity: 0.7;
   }
 }
 
