@@ -280,6 +280,8 @@ const generationSteps: GenerationStep[] = [
   { label: 'Optimizing your route, end to end', traceNames: ['parse_trip_intent', 'trip_brief', 'rank_options'] },
   { label: 'Scanning transport and flight options', traceNames: ['search_destinations', 'model_call'] },
   { label: 'Reading review signals for you', traceNames: [] },
+  { label: 'Extracting Instagram and TikTok signals', traceNames: [] },
+  { label: 'Embedding public social previews', traceNames: [] },
   { label: 'Finding stays for your trip', traceNames: ['trip_content'] },
   { label: 'Tailoring the plan to you', traceNames: ['save_trip'] },
 ]
