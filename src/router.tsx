@@ -5,6 +5,7 @@ import { ChatPage } from './routes/ChatPage'
 import { DashboardPage } from './routes/DashboardPage'
 import { DiscoverPage } from './routes/DiscoverPage'
 import { HomePage } from './routes/HomePage'
+import { TripDayDetailPage } from './routes/TripDayDetailPage'
 import { TripDetailPage } from './routes/TripDetailPage'
 import { TripsPage } from './routes/TripsPage'
 
@@ -42,6 +43,12 @@ const tripDetailRoute = createRoute({
   component: TripDetailPage,
 })
 
+const tripDayDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/trips/$tripId/days/$dayId',
+  component: TripDayDetailPage,
+})
+
 const bookingRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/book',
@@ -63,6 +70,7 @@ const routeTree = rootRoute.addChildren([
   discoverRoute,
   tripsRoute,
   tripDetailRoute,
+  tripDayDetailRoute,
   bookingRoute,
   dashboardRoute,
 ])

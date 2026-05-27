@@ -23,5 +23,7 @@ export function titleCase(value: string) {
 
 export function daysBetween(start: string, end: string) {
   const diff = new Date(end).getTime() - new Date(start).getTime()
-  return Math.max(1, Math.round(diff / 86_400_000))
+  return Math.max(1, Math.round(diff / 86_400_000) + 1)
 }
+
+export { travelerCountLabel } from '../../shared/travelerLabel'

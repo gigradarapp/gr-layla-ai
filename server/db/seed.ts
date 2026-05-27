@@ -1,3 +1,4 @@
+import { buildHotelBookingUrl } from '../../shared/hotelBookingUrl.js'
 import { db, id, jsonArray, migrate } from './sqlite.js'
 
 const now = new Date().toISOString()
@@ -278,19 +279,30 @@ const seedTrips = [
 
 const baseOffers = [
   ['flight', 'SkySearch demo', 'Singapore to Tokyo round trip', 420, 4.4, ['1 stop', '12h total', 'checked bag option'], 'dest_tokyo'],
-  ['hotel', 'StayFinder demo', 'Shinjuku design hotel', 165, 4.7, ['near station', 'breakfast option', 'free cancellation'], 'dest_tokyo'],
+  ['hotel', 'StayFinder demo', 'Ueno budget inn', 92, 4.1, ['budget tier', 'compact room', 'near station'], 'dest_tokyo'],
+  ['hotel', 'StayFinder demo', 'Shinjuku design hotel', 165, 4.7, ['regular tier', 'breakfast option', 'free cancellation'], 'dest_tokyo'],
+  ['hotel', 'StayFinder demo', 'Ginza premium suite', 285, 4.9, ['premium tier', 'suite upgrade', 'concierge'], 'dest_tokyo'],
   ['activity', 'LocalPass demo', 'Tokyo food alley evening tour', 72, 4.8, ['small group', '3 hours', 'local guide'], 'dest_tokyo'],
   ['flight', 'SkySearch demo', 'Singapore to Bali direct', 160, 4.5, ['direct', '2h 45m', 'budget carrier'], 'dest_bali'],
-  ['hotel', 'StayFinder demo', 'Canggu pool villa', 98, 4.6, ['private pool', 'workspace', 'breakfast included'], 'dest_bali'],
+  ['hotel', 'StayFinder demo', 'Kuta beach hostel', 42, 4.0, ['budget tier', 'shared pool', 'surf nearby'], 'dest_bali'],
+  ['hotel', 'StayFinder demo', 'Canggu pool villa', 98, 4.6, ['regular tier', 'private pool', 'breakfast included'], 'dest_bali'],
+  ['hotel', 'StayFinder demo', 'Seminyak cliff resort', 210, 4.8, ['premium tier', 'ocean view', 'spa access'], 'dest_bali'],
   ['activity', 'LocalPass demo', 'Ubud rice terrace and spa day', 64, 4.7, ['pickup included', '6 hours', 'wellness'], 'dest_bali'],
-  ['hotel', 'StayFinder demo', 'Mood Hotel platform queen room', 34, 3.7, ['budget stay', '170 reviews', 'non-refundable'], 'dest_johor_bahru'],
+  ['hotel', 'StayFinder demo', 'Capsule Inn JB Central', 28, 3.5, ['budget tier', 'near CIQ', 'compact room'], 'dest_johor_bahru'],
+  ['hotel', 'StayFinder demo', 'Mood Hotel platform queen room', 34, 3.7, ['budget tier', '170 reviews', 'non-refundable'], 'dest_johor_bahru'],
+  ['hotel', 'StayFinder demo', 'Amari Johor Bahru', 72, 4.3, ['regular tier', 'pool access', 'free cancellation'], 'dest_johor_bahru'],
+  ['hotel', 'StayFinder demo', 'DoubleTree Johor Bahru', 138, 4.6, ['premium tier', 'rooftop pool', 'suite upgrade'], 'dest_johor_bahru'],
   ['activity', 'LocalPass demo', 'Historic Johor Bahru cafe walk', 28, 4.4, ['5 experiences', 'local food', 'old town route'], 'dest_johor_bahru'],
   ['activity', 'Transfer demo', 'Singapore to Johor Bahru private car', 42, 4.5, ['50m estimate', 'land crossing', 'door to door'], 'dest_johor_bahru'],
   ['flight', 'SkySearch demo', 'Singapore to Seoul round trip', 380, 4.3, ['direct option', '6h 30m', 'red-eye return'], 'dest_seoul'],
-  ['hotel', 'StayFinder demo', 'Myeongdong boutique stay', 142, 4.5, ['central', 'quad rooms', 'airport bus nearby'], 'dest_seoul'],
+  ['hotel', 'StayFinder demo', 'Hongdae guesthouse', 58, 4.2, ['budget tier', 'metro nearby', 'shared lounge'], 'dest_seoul'],
+  ['hotel', 'StayFinder demo', 'Myeongdong boutique stay', 142, 4.5, ['regular tier', 'central', 'airport bus nearby'], 'dest_seoul'],
+  ['hotel', 'StayFinder demo', 'Gangnam design hotel', 228, 4.8, ['premium tier', 'sky lounge', 'late checkout'], 'dest_seoul'],
   ['activity', 'LocalPass demo', 'Seoul night market crawl', 45, 4.8, ['food-led', '2.5 hours', 'group friendly'], 'dest_seoul'],
   ['flight', 'SkySearch demo', 'Singapore to Queenstown open jaw', 980, 4.2, ['1 stop', 'premium economy option', 'flex dates'], 'dest_queenstown'],
-  ['hotel', 'StayFinder demo', 'Lake Wakatipu lodge', 260, 4.9, ['lake view', 'parking', 'breakfast included'], 'dest_queenstown'],
+  ['hotel', 'StayFinder demo', 'Queenstown backpackers lodge', 88, 4.1, ['budget tier', 'shared kitchen', 'town centre'], 'dest_queenstown'],
+  ['hotel', 'StayFinder demo', 'Lake Wakatipu lodge', 260, 4.9, ['regular tier', 'lake view', 'breakfast included'], 'dest_queenstown'],
+  ['hotel', 'StayFinder demo', 'Remarkables alpine retreat', 390, 4.9, ['premium tier', 'mountain view', 'spa access'], 'dest_queenstown'],
   ['activity', 'LocalPass demo', 'Milford Sound fly-cruise-fly', 420, 4.9, ['weather dependent', 'half day', 'scenic flight'], 'dest_queenstown'],
 ] as const
 
@@ -343,8 +355,8 @@ export function seedDatabase() {
 
   const insertTrip = db.prepare(`
     INSERT INTO trips
-      (id, user_id, title, destination, origin, start_date, end_date, budget_level, traveler_type, pace, status, summary, estimated_cost, hero_image_url, confidence, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, user_id, title, destination, origin, start_date, end_date, budget_level, traveler_type, pace, status, summary, estimated_cost, hero_image_url, confidence, focus_activities, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
   const insertDay = db.prepare(`
     INSERT INTO trip_days (id, trip_id, day_number, date, title, summary)
@@ -377,6 +389,7 @@ export function seedDatabase() {
       trip.estimated_cost,
       trip.hero_image_url,
       trip.confidence,
+      jsonArray([]),
       now,
       now,
     )
@@ -410,9 +423,10 @@ export function seedDatabase() {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
   for (const [type, provider, title, price, rating, perks, destinationId] of baseOffers) {
-    const imageUrl =
-      destinations.find((destination) => destination.id === destinationId)?.image_url ?? destinations[0].image_url
+    const destination = destinations.find((item) => item.id === destinationId) ?? destinations[0]
+    const imageUrl = destination.image_url
     const relatedTrip = destinationId === 'dest_tokyo' ? 'trip_tokyo_kyoto' : destinationId === 'dest_bali' ? 'trip_bali_reset' : destinationId === 'dest_seoul' ? 'trip_seoul_friends' : null
+    const offerUrl = type === 'hotel' ? buildHotelBookingUrl(title, destination.name) : '#simulated-handoff'
     insertOffer.run(
       id('offer'),
       relatedTrip,
@@ -423,7 +437,7 @@ export function seedDatabase() {
       price,
       rating,
       jsonArray(perks),
-      '#simulated-handoff',
+      offerUrl,
       imageUrl,
       now,
     )

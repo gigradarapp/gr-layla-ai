@@ -17,6 +17,14 @@ db.pragma('foreign_keys = ON')
 export function migrate() {
   const schema = readFileSync(schemaPath, 'utf8')
   db.exec(schema)
+  const dayColumns = db.prepare(`PRAGMA table_info(trip_days)`).all() as Array<{ name: string }>
+  if (!dayColumns.some((column) => column.name === 'image_url')) {
+    db.exec(`ALTER TABLE trip_days ADD COLUMN image_url TEXT NOT NULL DEFAULT ''`)
+  }
+  const tripColumns = db.prepare(`PRAGMA table_info(trips)`).all() as Array<{ name: string }>
+  if (!tripColumns.some((column) => column.name === 'focus_activities')) {
+    db.exec(`ALTER TABLE trips ADD COLUMN focus_activities TEXT NOT NULL DEFAULT '[]'`)
+  }
 }
 
 export function hasSeedData() {

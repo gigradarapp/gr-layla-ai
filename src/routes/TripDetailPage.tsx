@@ -2,93 +2,60 @@ import { Link, useParams } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import {
   ArrowLeft,
-  Building2,
   CalendarDays,
   Car,
   ChevronRight,
-  Copy,
-  Download,
-  Home,
+  ExternalLink,
   Hotel,
   ListChecks,
-  Mail,
   MapPin,
-  MessageCircle,
-  PhoneCall,
-  Play,
-  Send,
-  Share2,
-  Shuffle,
   ShoppingCart,
+  Shuffle,
   Trash2,
   UserRound,
   X,
 } from 'lucide-react'
-import { useState } from 'react'
+import { resolveHotelBookingUrl } from '../../shared/hotelBookingUrl'
+import { TripOpenMap } from '../components/TripOpenMap'
+import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { ErrorState } from '../components/ErrorState'
 import { LoadingState } from '../components/LoadingState'
+import { pickDayImageUrl, pickStayImageUrl, resolveTripImageUrl } from '../../shared/destinationImages'
+import { TripImage } from '../components/TripImage'
+import { dayExperienceCount, experienceCountLabel } from '../../shared/experienceCount'
+import {
+  defaultStayTier,
+  hotelOffersByTierLists,
+  STAY_TIER_LABELS,
+  STAY_TIERS,
+  type StayTier,
+} from '../../shared/stayTiers'
+import { parseStayPerks } from '../../shared/stayOfferMeta'
 import { api } from '../lib/api'
+import { daysBetween, money, shortDate, travelerCountLabel } from '../lib/format'
 import type { Offer, TripDetail } from '../lib/types'
-import { daysBetween, money, shortDate } from '../lib/format'
 
 function dateRange(trip: TripDetail) {
   return `${shortDate(trip.startDate)} - ${shortDate(trip.endDate)}`
 }
 
-function johorTitle(trip: TripDetail) {
-  if (trip.destination.toLowerCase().includes('johor')) return '2-Day Solo Johor Bahru Budget Escape'
-  return trip.title
-}
-
-function shareCode(tripId: string) {
-  const base = tripId.replace(/[^a-z0-9]/gi, '').toUpperCase()
-  return `01${base}LAYLA`.slice(0, 18)
-}
-
-function shareHeroImage(trip: TripDetail) {
-  if (trip.destination.toLowerCase().includes('johor')) {
-    return 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1200&q=80'
-  }
-
-  return trip.heroImageUrl
-}
-
-function hotelOffer(trip: TripDetail) {
-  return trip.offers.find((offer) => offer.type === 'hotel') ?? trip.offers[0]
-}
-
-function TripMap({ fullscreen = false, onExpand }: { fullscreen?: boolean; onExpand?: () => void }) {
-  return (
-    <div className={fullscreen ? 'layla-map fullscreen' : 'layla-map'}>
-      <div className="map-roads" aria-hidden="true">
-        <span className="road road-one" />
-        <span className="road road-two" />
-        <span className="road road-three" />
-        <span className="water-shape" />
-      </div>
-      <span className="map-label johor">Johor Bahru</span>
-      <span className="map-label singapore">Singapore</span>
-      <span className="route-line" />
-      <span className="map-pin pin-johor">
-        <Building2 size={18} />
-      </span>
-      <span className="map-pin pin-food">3</span>
-      <span className="map-pin pin-stay">
-        <Hotel size={17} />
-      </span>
-      <span className="home-pin">
-        <Home size={19} />
-      </span>
-      <button type="button" className="map-play" aria-label="Preview route">
-        <Play size={18} fill="currentColor" />
-      </button>
-      {onExpand ? (
-        <button type="button" className="map-expand" aria-label="Open full screen map" onClick={onExpand}>
-          <ChevronRight size={20} />
-        </button>
-      ) : null}
-    </div>
+function transferMeta(trip: TripDetail) {
+  const transfer = trip.offers.find(
+    (offer) =>
+      offer.type === 'activity' && /transfer|car|crossing/i.test(`${offer.title} ${offer.perks.join(' ')}`),
   )
+  const travelTime = transfer?.perks.find((perk) => /\d+\s*m\b/i.test(perk))
+  return {
+    label: transfer?.title ?? `Private car · ${trip.origin} to ${trip.destination}`,
+    time: travelTime ?? 'Door-to-door',
+    provider: transfer?.provider,
+  }
+}
+
+function introCopy(trip: TripDetail) {
+  const first = trip.summary.split(/[.!?]\s/)[0]?.trim()
+  return first || `Your ${trip.pace} ${trip.travelerType} trip from ${trip.origin} to ${trip.destination}.`
 }
 
 function RouteSelector({ trip }: { trip: TripDetail }) {
@@ -146,12 +113,14 @@ function TransportCard({
   to,
   fromDate,
   toDate,
+  label,
   time,
 }: {
   from: string
   to: string
   fromDate: string
   toDate: string
+  label: string
   time: string
 }) {
   return (
@@ -174,9 +143,9 @@ function TransportCard({
       <div className="transport-meta">
         <div>
           <span>Travel time: {time}</span>
-          <strong>Private car</strong>
+          <strong>{label}</strong>
         </div>
-        <button type="button">
+        <button type="button" disabled>
           <Shuffle size={16} />
           Change
         </button>
@@ -185,62 +154,188 @@ function TransportCard({
   )
 }
 
-function StayCard({ offer }: { offer?: Offer }) {
-  const hotelName = offer?.title.toLowerCase().includes('mood hotel') ? 'Mood Hotel' : offer?.title || 'Mood Hotel'
+function StayCard({
+  offer,
+  destination,
+  tier,
+  tripId,
+  rank,
+}: {
+  offer?: Offer
+  destination: string
+  tier: StayTier
+  tripId: string
+  rank?: number
+}) {
+  const tierIndex = STAY_TIERS.indexOf(tier)
+  const stayImage = resolveTripImageUrl(
+    offer?.imageUrl,
+    pickStayImageUrl(destination, tier, tierIndex >= 0 ? tierIndex : 0),
+  )
+  const meta = parseStayPerks(offer?.perks ?? [])
+  const displayRank = rank ?? meta.rank ?? undefined
+  const rating = offer?.rating
+  const bookingUrl = offer ? resolveHotelBookingUrl(offer.url, offer.title, destination) : null
+  const reviewCountLabel = meta.reviewCount
+    ? `${meta.reviewCount.toLocaleString()} reviews`
+    : meta.reviewLabel || 'Guest reviews'
 
   return (
     <article className="stay-card-v2">
+      {displayRank ? <span className="stay-rank-badge">#{displayRank}</span> : null}
       <div className="stay-main">
-        <img
-          src={offer?.imageUrl || 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=500&q=80'}
-          alt=""
-        />
+        <TripImage src={stayImage} alt="" />
         <div>
-          <span className="stars">★★★</span>
-          <h3>{hotelName}</h3>
-          <p>Platform Queen Room</p>
-          <small>No meals included</small>
-          <small>Non-Refundable</small>
+          <span className="stars">{rating ? `${rating.toFixed(1)} ★` : 'Hotel stay'}</span>
+          <h3>{offer?.title || `Stay in ${destination}`}</h3>
+          {offer?.provider ? <p className="stay-provider">{offer.provider}</p> : null}
+          <p>{meta.roomDescription || 'Matched hotel option'}</p>
+          {meta.neighborhood ? <small className="stay-neighborhood">{meta.neighborhood}</small> : null}
+          {meta.distanceLabel ? <small className="stay-distance">{meta.distanceLabel}</small> : null}
+          {meta.amenities.slice(0, 3).map((amenity) => (
+            <small key={amenity}>{amenity}</small>
+          ))}
+          {meta.policies.slice(0, 2).map((policy) => (
+            <small key={policy} className="stay-policy">
+              {policy}
+            </small>
+          ))}
         </div>
       </div>
-      <div className="review-row">
-        <strong>6.9</strong>
-        <div>
-          <b>Pleasant</b>
-          <span>170 reviews</span>
+      {rating ? (
+        <div className="review-row">
+          <strong>{rating.toFixed(1)}</strong>
+          <div>
+            <b>{rating >= 4.5 ? 'Excellent' : rating >= 4 ? 'Great' : rating >= 3.5 ? 'Good' : 'Fair'}</b>
+            <span>{reviewCountLabel}</span>
+          </div>
         </div>
-      </div>
+      ) : null}
       <div className="stay-price-row">
         <div>
           <span>from</span>
-          <strong>{money(offer?.price ?? 34)}</strong>
-          <small>Includes taxes and fees</small>
+          <strong>{money(offer?.price ?? 0)}</strong>
+          <small>Check live rates on Booking.com</small>
         </div>
-        <button type="button">
+        <button type="button" disabled>
           <Shuffle size={16} />
           Change
         </button>
-        <button type="button" aria-label="Remove stay">
+        <button type="button" aria-label="Remove stay" disabled>
           <Trash2 size={17} />
         </button>
       </div>
-      <p className="stay-note">✦ The hotel is located in Johor Bahru and keeps the budget tight for this escape.</p>
+      {bookingUrl ? (
+        <div className="stay-booking-actions">
+          <a
+            href={bookingUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="stay-booking-link primary"
+          >
+            View on Booking.com
+            <ExternalLink size={15} />
+          </a>
+          <Link
+            to="/book"
+            search={{ tripId }}
+            className="stay-booking-link secondary"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            All trip offers
+          </Link>
+        </div>
+      ) : null}
     </article>
   )
 }
 
-function ItineraryCard({ day, imageUrl }: { day: TripDetail['days'][number]; imageUrl: string }) {
+function StayRecommendations({ trip }: { trip: TripDetail }) {
+  const byTier = hotelOffersByTierLists(trip.offers)
+  const [selectedTier, setSelectedTier] = useState<StayTier>(() => defaultStayTier(trip.budgetLevel))
+
+  useEffect(() => {
+    setSelectedTier(defaultStayTier(trip.budgetLevel))
+  }, [trip.id, trip.budgetLevel])
+
+  const tierOffers = byTier[selectedTier]
+
   return (
-    <article className="itinerary-card-v2">
-      <img src={imageUrl} alt="" />
+    <div className="stay-recommendations">
+      <div className="stay-tier-picker segmented-control" role="tablist" aria-label="Choose hotel tier">
+        {STAY_TIERS.map((tier) => {
+          const offers = byTier[tier]
+          const fromPrice = offers.length > 0 ? Math.min(...offers.map((offer) => offer.price)) : null
+          return (
+            <button
+              key={tier}
+              type="button"
+              role="tab"
+              aria-selected={selectedTier === tier}
+              className={`stay-tier-tab stay-tier-${tier}${selectedTier === tier ? ' active' : ''}`}
+              onClick={() => setSelectedTier(tier)}
+            >
+              <span>{STAY_TIER_LABELS[tier]}</span>
+              {fromPrice != null ? <small>from {money(fromPrice)}</small> : <small>—</small>}
+            </button>
+          )
+        })}
+      </div>
+      <div
+        className="stay-options-scroll"
+        role="list"
+        aria-label={`${STAY_TIER_LABELS[selectedTier]} stay options, best rated first`}
+      >
+        {tierOffers.length > 0 ? (
+          tierOffers.map((offer, index) => (
+            <StayCard
+              key={offer.id}
+              tier={selectedTier}
+              offer={offer}
+              destination={trip.destination}
+              tripId={trip.id}
+              rank={index + 1}
+            />
+          ))
+        ) : (
+          <StayCard tier={selectedTier} destination={trip.destination} tripId={trip.id} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ItineraryCard({
+  day,
+  tripId,
+  imageUrl,
+  focusActivities,
+}: {
+  day: TripDetail['days'][number]
+  tripId: string
+  imageUrl: string
+  focusActivities: string[]
+}) {
+  const experiences = dayExperienceCount(day.dayNumber, focusActivities, day.activities)
+
+  return (
+    <Link
+      to="/trips/$tripId/days/$dayId"
+      params={{ tripId, dayId: day.id }}
+      className="itinerary-card-v2"
+      aria-label={`Open Day ${day.dayNumber} itinerary`}
+    >
+      <TripImage src={imageUrl} alt="" />
       <div>
         <span>
-          Day {day.dayNumber} · {day.activities.length + 2} Experiences · {shortDate(day.date)}
+          Day {day.dayNumber} · {experienceCountLabel(experiences)} · {shortDate(day.date)}
         </span>
         <h3>{day.title}</h3>
+        {day.summary ? <p>{day.summary}</p> : null}
       </div>
-      <ChevronRight size={22} />
-    </article>
+      <ChevronRight size={22} aria-hidden />
+    </Link>
   )
 }
 
@@ -263,105 +358,9 @@ function BottomNav({ tripId }: { tripId: string }) {
   )
 }
 
-function ShareFeedbackModal({
-  title,
-  trip,
-  onClose,
-}: {
-  title: string
-  trip: TripDetail
-  onClose: () => void
-}) {
-  const [copied, setCopied] = useState(false)
-  const shareLink = `https://layla.ai/chat/${shareCode(trip.id)}`
-  const encodedLink = encodeURIComponent(shareLink)
-  const encodedText = encodeURIComponent(`Help me refine this trip: ${title}`)
-
-  async function copyLink() {
-    try {
-      await navigator.clipboard.writeText(shareLink)
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 1500)
-    } catch {
-      setCopied(false)
-    }
-  }
-
-  async function shareNative() {
-    try {
-      if (navigator.share) {
-        await navigator.share({ title, text: 'Get suggestions from your group and refine this trip.', url: shareLink })
-        return
-      }
-
-      await copyLink()
-    } catch {
-      setCopied(false)
-    }
-  }
-
-  return (
-    <div className="share-feedback-overlay" role="presentation" onClick={onClose}>
-      <section
-        className="share-feedback-sheet"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="share-feedback-title"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="share-feedback-hero">
-          <img src={shareHeroImage(trip)} alt="" />
-          <button type="button" aria-label="Close share feedback" className="share-feedback-close" onClick={onClose}>
-            <X size={29} />
-          </button>
-        </div>
-
-        <div className="share-feedback-body">
-          <h2 id="share-feedback-title">Share and get Feedback on your trip</h2>
-          <p>Get suggestions from your group and refine this trip.</p>
-
-          <div className="share-grid" aria-label="Share destinations">
-            <a className="share-brand whatsapp" href={`https://wa.me/?text=${encodedText}%20${encodedLink}`} aria-label="Share on WhatsApp" target="_blank" rel="noreferrer">
-              <MessageCircle size={45} />
-              <PhoneCall size={21} className="whatsapp-phone" />
-            </a>
-            <a className="share-brand facebook" href={`https://www.facebook.com/sharer/sharer.php?u=${encodedLink}`} aria-label="Share on Facebook" target="_blank" rel="noreferrer">
-              <span>f</span>
-            </a>
-            <a className="share-brand x-social" href={`https://twitter.com/intent/tweet?text=${encodedText}&url=${encodedLink}`} aria-label="Share on X" target="_blank" rel="noreferrer">
-              <span>X</span>
-            </a>
-            <button type="button" className="share-brand messenger" aria-label="Share with Messenger" onClick={() => void shareNative()}>
-              <span className="messenger-mark" />
-            </button>
-            <a className="share-brand telegram" href={`https://t.me/share/url?url=${encodedLink}&text=${encodedText}`} aria-label="Share on Telegram" target="_blank" rel="noreferrer">
-              <Send size={37} fill="currentColor" />
-            </a>
-            <a className="share-brand email" href={`mailto:?subject=${encodeURIComponent(title)}&body=${encodedText}%0A%0A${encodedLink}`} aria-label="Share by email">
-              <Mail size={39} />
-            </a>
-          </div>
-
-          <div className="share-link-block">
-            <strong>Page Link</strong>
-            <button type="button" className="share-link-copy" onClick={() => void copyLink()}>
-              <span>{shareLink}</span>
-              <i aria-hidden="true">
-                <Copy size={24} />
-              </i>
-            </button>
-            <small aria-live="polite">{copied ? 'Copied link' : ' '}</small>
-          </div>
-        </div>
-      </section>
-    </div>
-  )
-}
-
 export function TripDetailPage() {
   const { tripId } = useParams({ from: '/trips/$tripId' })
   const [mapOpen, setMapOpen] = useState(false)
-  const [shareOpen, setShareOpen] = useState(false)
   const query = useQuery({ queryKey: ['trip', tripId], queryFn: () => api.trip(tripId) })
 
   if (query.isLoading) return <LoadingState />
@@ -369,18 +368,9 @@ export function TripDetailPage() {
   if (!query.data) return <ErrorState error={new Error('Trip not found')} />
 
   const trip = query.data
-  const stay = hotelOffer(trip)
+  const transport = transferMeta(trip)
   const totalDays = daysBetween(trip.startDate, trip.endDate)
-  const title = johorTitle(trip)
-  const introCopy = trip.destination.toLowerCase().includes('johor')
-    ? 'Hey there! Your upcoming solo overnight escape is shaped around a simple Singapore land route, budget stay, cafes, and easy local activities.'
-    : trip.summary.split('. ')[0]
-  const dayImages = [
-    'https://images.unsplash.com/photo-1596422846543-75c6fc197f07?auto=format&fit=crop&w=500&q=80',
-    'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=500&q=80',
-    trip.heroImageUrl,
-  ]
-
+  const nights = Math.max(1, totalDays - 1)
   return (
     <section className="layla-trip-route">
       <div className="layla-trip-frame">
@@ -389,25 +379,16 @@ export function TripDetailPage() {
             <ArrowLeft size={22} />
             <span>Chat</span>
           </Link>
-          <div>
-            <button type="button" aria-label="Share trip" onClick={() => setShareOpen(true)}>
-              <Share2 size={19} />
-            </button>
-            <button type="button" className="download-trip">
-              <Download size={18} />
-              Download
-            </button>
-          </div>
         </header>
 
         <main className="trip-detail-scroll">
-          <TripMap onExpand={() => setMapOpen(true)} />
+          <TripOpenMap trip={trip} onExpand={() => setMapOpen(true)} />
 
           <section className="trip-title-v2">
-            <h1>{title}</h1>
+            <h1>{trip.title}</h1>
             <p>
               <UserRound size={16} />
-              1 traveller
+              {travelerCountLabel(trip.travelerType)}
               <CalendarDays size={16} />
               {dateRange(trip)}
             </p>
@@ -419,50 +400,70 @@ export function TripDetailPage() {
             <TimelineSection icon={<MapPin size={25} fill="currentColor" />} title={trip.destination}>
               <div className="destination-intro">
                 <strong>
-                  Day 1 <span>· {dateRange(trip)}</span>
+                  Day 1 <span>· {shortDate(trip.startDate)}</span>
                 </strong>
-                <p>{introCopy}</p>
-                <button type="button">... Read more</button>
+                <p>{introCopy(trip)}</p>
               </div>
             </TimelineSection>
 
             <TimelineSection icon={<Car size={23} fill="currentColor" />} title="Arrive" meta={shortDate(trip.startDate)}>
-              <TransportCard from={trip.origin} to={trip.destination} fromDate={shortDate(trip.startDate)} toDate={shortDate(trip.startDate)} time="50m" />
+              <TransportCard
+                from={trip.origin}
+                to={trip.destination}
+                fromDate={shortDate(trip.startDate)}
+                toDate={shortDate(trip.startDate)}
+                label={transport.label}
+                time={transport.time}
+              />
             </TimelineSection>
 
-            <TimelineSection icon={<Hotel size={23} />} title="Stay" meta={`${dateRange(trip)} · ${Math.max(1, totalDays - 1)} night`}>
-              <StayCard offer={stay} />
+            <TimelineSection icon={<Hotel size={23} />} title="Stay" meta={`${dateRange(trip)} · ${nights} night${nights === 1 ? '' : 's'}`}>
+              <StayRecommendations trip={trip} />
             </TimelineSection>
 
             <TimelineSection icon={<CalendarDays size={23} />} title="Itinerary" meta={dateRange(trip)}>
               <div className="itinerary-list-v2">
                 {trip.days.map((day, index) => (
-                  <ItineraryCard key={day.id} day={day} imageUrl={dayImages[index % dayImages.length]} />
+                  <ItineraryCard
+                    key={day.id}
+                    tripId={trip.id}
+                    day={day}
+                    focusActivities={trip.focusActivities ?? []}
+                    imageUrl={resolveTripImageUrl(day.imageUrl, pickDayImageUrl(trip.destination, day, index), trip.heroImageUrl)}
+                  />
                 ))}
               </div>
             </TimelineSection>
 
             <TimelineSection icon={<Car size={23} fill="currentColor" />} title="Depart" meta={shortDate(trip.endDate)}>
-              <TransportCard from={trip.destination} to={trip.origin} fromDate={shortDate(trip.endDate)} toDate={shortDate(trip.endDate)} time="42m" />
+              <TransportCard
+                from={trip.destination}
+                to={trip.origin}
+                fromDate={shortDate(trip.endDate)}
+                toDate={shortDate(trip.endDate)}
+                label={transport.label}
+                time={transport.time}
+              />
             </TimelineSection>
           </div>
         </main>
 
         <BottomNav tripId={trip.id} />
 
-        {mapOpen ? (
-          <div className="fullscreen-map-modal">
-            <div className="map-modal-topbar">
-              <strong>{title}</strong>
-              <button type="button" aria-label="Close map" onClick={() => setMapOpen(false)}>
-                <X size={22} />
-              </button>
-            </div>
-            <TripMap fullscreen />
-          </div>
-        ) : null}
-
-        {shareOpen ? <ShareFeedbackModal title={title} trip={trip} onClose={() => setShareOpen(false)} /> : null}
+        {mapOpen
+          ? createPortal(
+              <div className="fullscreen-map-modal" role="dialog" aria-modal="true" aria-label="Trip map">
+                <div className="map-modal-topbar">
+                  <strong>{trip.title}</strong>
+                  <button type="button" aria-label="Close map" onClick={() => setMapOpen(false)}>
+                    <X size={22} />
+                  </button>
+                </div>
+                <TripOpenMap trip={trip} fullscreen />
+              </div>,
+              document.body,
+            )
+          : null}
       </div>
     </section>
   )

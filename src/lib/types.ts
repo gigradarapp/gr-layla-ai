@@ -33,6 +33,7 @@ export type TripDay = {
   date: string
   title: string
   summary: string
+  imageUrl: string
   activities: Activity[]
 }
 
@@ -74,6 +75,7 @@ export type Trip = {
   estimatedCost: number
   heroImageUrl: string
   confidence: number
+  focusActivities: string[]
   createdAt: string
   updatedAt: string
 }

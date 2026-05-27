@@ -11,6 +11,7 @@ const agentPlanSchema = z.object({
       who: z.string().optional(),
       when: z.string().optional(),
       intent: z.string().optional(),
+      activities: z.array(z.string()).optional(),
       budgetLevel: z.string().optional(),
       pace: z.string().optional(),
     })

@@ -234,6 +234,19 @@ export function isTripConfirmationMessage(message: string) {
   return false
 }
 
+/** Primary CTA pill labels (confirm / build trip) — styled prominently in chat. */
+export function isPrimaryTripCtaLabel(label: string) {
+  const trimmed = label.trim()
+  if (!trimmed) return false
+  if (trimmed === 'Confirm summary') return true
+  const lower = trimmed.toLowerCase()
+  if (/^build\s+it\b/.test(lower)) return true
+  if (/^build\s+(?:the\s+)?trip\b/.test(lower)) return true
+  if (/^let'?s\s+build\b/.test(lower)) return true
+  if (/^generate\s+(?:the\s+)?trip\b/.test(lower)) return true
+  return isTripConfirmationMessage(trimmed)
+}
+
 export function isActivityPickMessage(message: string, context: ChecklistContext) {
   const trimmed = message.trim()
   if (!trimmed || inferFieldFromValue(trimmed)) return false

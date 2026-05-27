@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS trips (
   estimated_cost INTEGER NOT NULL,
   hero_image_url TEXT NOT NULL,
   confidence INTEGER NOT NULL,
+  focus_activities TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id)
@@ -53,6 +54,7 @@ CREATE TABLE IF NOT EXISTS trip_days (
   date TEXT NOT NULL,
   title TEXT NOT NULL,
   summary TEXT NOT NULL,
+  image_url TEXT NOT NULL DEFAULT '',
   FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
 );
 

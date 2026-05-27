@@ -1,8 +1,15 @@
 import { ExternalLink, Star } from 'lucide-react'
+import { resolveHotelBookingUrl } from '../../../shared/hotelBookingUrl'
 import { money, titleCase } from '../../lib/format'
 import type { Offer } from '../../lib/types'
 
-export function OfferCard({ offer }: { offer: Offer }) {
+export function OfferCard({ offer, destination }: { offer: Offer; destination?: string }) {
+  const handoffUrl =
+    offer.type === 'hotel' && destination
+      ? resolveHotelBookingUrl(offer.url, offer.title, destination)
+      : offer.url.startsWith('http')
+        ? offer.url
+        : undefined
   return (
     <article className="offer-card">
       <img src={offer.imageUrl} alt="" />
@@ -21,10 +28,18 @@ export function OfferCard({ offer }: { offer: Offer }) {
         </div>
         <div className="offer-footer">
           <strong>{money(offer.price)}</strong>
-          <a href={offer.url} className="secondary-action" aria-label={`Open simulated handoff for ${offer.title}`}>
-            Demo handoff
-            <ExternalLink size={14} />
-          </a>
+          {handoffUrl ? (
+            <a
+              href={handoffUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="secondary-action"
+              aria-label={`View ${offer.title} on Booking.com`}
+            >
+              {offer.type === 'hotel' ? 'View on Booking.com' : 'View offer'}
+              <ExternalLink size={14} />
+            </a>
+          ) : null}
         </div>
       </div>
     </article>

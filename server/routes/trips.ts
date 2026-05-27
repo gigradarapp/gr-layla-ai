@@ -38,18 +38,19 @@ export function registerTripRoutes(router: Router) {
     res.json(rows.map(mapTrip))
   })
 
-  router.post('/trips', (req, res) => {
+  router.post('/trips', async (req, res) => {
     const result = createTripSchema.safeParse(req.body)
     if (!result.success) {
       res.status(400).json({ error: 'Invalid trip request', details: result.error.flatten() })
       return
     }
-    const tripId = createGeneratedTrip(result.data)
-    res.status(201).json(getTripDetail(tripId))
+    const tripId = await createGeneratedTrip(result.data)
+    const trip = await getTripDetail(tripId)
+    res.status(201).json(trip)
   })
 
-  router.get('/trips/:id', (req, res) => {
-    const trip = getTripDetail(req.params.id)
+  router.get('/trips/:id', async (req, res) => {
+    const trip = await getTripDetail(req.params.id)
     if (!trip) {
       res.status(404).json({ error: 'Trip not found' })
       return
@@ -57,7 +58,7 @@ export function registerTripRoutes(router: Router) {
     res.json(trip)
   })
 
-  router.patch('/trips/:id', (req, res) => {
+  router.patch('/trips/:id', async (req, res) => {
     const existing = db.prepare('SELECT * FROM trips WHERE id = ?').get(req.params.id)
     if (!existing) {
       res.status(404).json({ error: 'Trip not found' })
@@ -74,16 +75,16 @@ export function registerTripRoutes(router: Router) {
       }
     }
     if (updates.length === 0) {
-      res.json(getTripDetail(req.params.id))
+      res.json(await getTripDetail(req.params.id))
       return
     }
     updates.push('updated_at = ?')
     params.push(new Date().toISOString(), req.params.id)
     db.prepare(`UPDATE trips SET ${updates.join(', ')} WHERE id = ?`).run(...params)
-    res.json(getTripDetail(req.params.id))
+    res.json(await getTripDetail(req.params.id))
   })
 
-  router.post('/trips/:id/refine', (req, res) => {
+  router.post('/trips/:id/refine', async (req, res) => {
     const result = refineSchema.safeParse(req.body)
     if (!result.success) {
       res.status(400).json({ error: 'Invalid refinement', details: result.error.flatten() })
@@ -94,7 +95,7 @@ export function registerTripRoutes(router: Router) {
       res.status(404).json({ error: 'Trip not found' })
       return
     }
-    res.json({ ...refined, trip: getTripDetail(req.params.id) })
+    res.json({ ...refined, trip: await getTripDetail(req.params.id) })
   })
 
   router.get('/trips/:id/messages', (req, res) => {

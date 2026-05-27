@@ -33,6 +33,7 @@ import {
   gateContextPatch,
   firstMissingField,
   inferFieldFromValue,
+  isPrimaryTripCtaLabel,
   isTripConfirmationMessage,
   normalizeDateWindow,
   preserveValidatedChecklistFields,
@@ -270,13 +271,35 @@ function resolveSuggestions(field: FieldKey, fromAgent: string[], context: TripC
   return fieldSuggestions[field as Exclude<FieldKey, 'when'>] ?? []
 }
 
-const generationSteps = [
-  'Optimizing your route, end to end',
-  'Scanning 2000+ airlines for best value',
-  'Reading review signals for you',
-  'Finding hotels with demo-only deals',
-  'Tailoring the plan to you',
+type GenerationStep = {
+  label: string
+  traceNames: string[]
+}
+
+const generationSteps: GenerationStep[] = [
+  { label: 'Optimizing your route, end to end', traceNames: ['parse_trip_intent', 'trip_brief', 'rank_options'] },
+  { label: 'Scanning transport and flight options', traceNames: ['search_destinations', 'model_call'] },
+  { label: 'Reading review signals for you', traceNames: [] },
+  { label: 'Finding stays for your trip', traceNames: ['trip_content'] },
+  { label: 'Tailoring the plan to you', traceNames: ['save_trip'] },
 ]
+
+function generationStepDone(step: GenerationStep, trace: AgentTrace[]) {
+  if (step.traceNames.length === 0) return false
+  return step.traceNames.some((name) => trace.some((entry) => entry.name === name))
+}
+
+function generationStepStatus(
+  index: number,
+  trace: AgentTrace[],
+  options: { isPending: boolean; isComplete: boolean; activeIndex: number },
+): 'done' | 'active' | 'pending' {
+  if (options.isComplete) return 'done'
+  if (generationStepDone(generationSteps[index], trace)) return 'done'
+  if (options.isPending && index < options.activeIndex) return 'done'
+  if (options.isPending && index === options.activeIndex) return 'active'
+  return 'pending'
+}
 
 function nextId() {
   return `local_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
@@ -885,11 +908,13 @@ function ChatBubble({
               key={`${message.id}-${suggestion}`}
               type="button"
               className={
-                suggestion === ACTIVITY_IM_GOOD_LABEL
-                  ? 'is-activity-done'
-                  : suggestion === SUGGEST_MORE_LABEL || suggestion === ACTIVITY_ADD_MORE_LABEL
-                    ? 'is-suggest-more'
-                    : undefined
+                isPrimaryTripCtaLabel(suggestion)
+                  ? 'is-confirm-summary'
+                  : suggestion === ACTIVITY_IM_GOOD_LABEL
+                    ? 'is-activity-done'
+                    : suggestion === SUGGEST_MORE_LABEL || suggestion === ACTIVITY_ADD_MORE_LABEL
+                      ? 'is-suggest-more'
+                      : undefined
               }
               disabled={suggestionsDisabled}
               onPointerDown={(event) => {
@@ -1026,42 +1051,54 @@ function GenerationScreen({
   context,
   lastTrip,
   isPending,
+  activeStep,
+  toolTrace,
   onOpenTrip,
 }: {
   context: TripContext
   lastTrip: TripDetail | null
   isPending: boolean
+  activeStep: number
+  toolTrace: AgentTrace[]
   onOpenTrip: () => void
 }) {
+  const isComplete = Boolean(lastTrip)
+  const activeLabel = generationSteps[activeStep]?.label ?? 'Building your itinerary'
+
   return (
-    <section className="layla-generation-screen">
-      <h1>{displayValue(context, 'whereTo') || 'Johor Bahru'} Budget Trip</h1>
+    <section className="layla-generation-screen" aria-busy={isPending && !isComplete}>
+      <h1>{displayValue(context, 'whereTo') || 'Your trip'}</h1>
       <div className="generation-card-stack" aria-hidden="true">
         <span className="gen-card card-one" />
         <span className="gen-card card-two" />
         <span className="gen-card card-three" />
         <span className="gen-card card-four" />
       </div>
-      <div className="generation-steps-v2">
+      <div className="generation-steps-v2" aria-label="Trip build progress">
         {generationSteps.map((step, index) => {
-          const done = lastTrip || index < 3
-          const pending = !lastTrip && index >= 3
+          const status = generationStepStatus(index, toolTrace, { isPending, isComplete, activeIndex: activeStep })
           return (
-            <div key={step} className={pending ? 'generation-row pending' : 'generation-row done'}>
-              {done ? <Check size={18} /> : <Circle size={18} />}
-              <span>{step}</span>
+            <div key={step.label} className={`generation-row ${status}`}>
+              {status === 'done' ? (
+                <Check size={18} />
+              ) : status === 'active' ? (
+                <Loader2 size={18} className="spin" aria-hidden="true" />
+              ) : (
+                <Circle size={18} />
+              )}
+              <span>{step.label}</span>
             </div>
           )
         })}
       </div>
-      {lastTrip ? (
+      {isComplete ? (
         <button type="button" className="generation-open-trip" onClick={onOpenTrip}>
           Open full trip card
         </button>
       ) : (
-        <div className="generation-loading">
+        <div className="generation-loading" aria-live="polite">
           <Loader2 size={18} className={isPending ? 'spin' : ''} />
-          Building your itinerary
+          {isPending ? activeLabel : 'Building your itinerary'}
         </div>
       )}
     </section>
@@ -1080,6 +1117,7 @@ export function PlannerPanel({ compact = false }: { compact?: boolean }) {
   const [context, setContext] = useState<TripContext>(emptyContext)
   const [activeField, setActiveField] = useState<FieldKey>('whereTo')
   const [stage, setStage] = useState<Stage>('collecting')
+  const [generationStep, setGenerationStep] = useState(0)
   const [checklistExpanded, setChecklistExpanded] = useState(false)
   const [lastTrip, setLastTrip] = useState<TripDetail | null>(null)
   const [toolTrace, setToolTrace] = useState<AgentTrace[]>([])
@@ -1407,6 +1445,7 @@ export function PlannerPanel({ compact = false }: { compact?: boolean }) {
     onSuccess: async (result) => {
       setLastTrip(result.trip)
       setToolTrace(result.trace)
+      setGenerationStep(generationSteps.length)
       setStage('ready')
       await queryClient.invalidateQueries({ queryKey: ['trips'] })
       await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
@@ -1566,6 +1605,7 @@ export function PlannerPanel({ compact = false }: { compact?: boolean }) {
       setMessages((current) => [...current, { id: nextId(), role: 'user', content: userText }])
     }
     setStage('generating')
+    setGenerationStep(0)
     setToolTrace([
       {
         name: 'trip_brief',
@@ -1579,6 +1619,17 @@ export function PlannerPanel({ compact = false }: { compact?: boolean }) {
       context: finalContext,
     })
   }
+
+  useEffect(() => {
+    if (stage !== 'generating' || !runAgent.isPending) return
+
+    setGenerationStep(0)
+    const timer = window.setInterval(() => {
+      setGenerationStep((current) => Math.min(generationSteps.length - 1, current + 1))
+    }, 1500)
+
+    return () => window.clearInterval(timer)
+  }, [stage, runAgent.isPending])
 
   useEffect(() => {
     if (compact || pendingBootstrapped.current) return
@@ -1641,6 +1692,8 @@ export function PlannerPanel({ compact = false }: { compact?: boolean }) {
             context={context}
             lastTrip={lastTrip}
             isPending={runAgent.isPending}
+            activeStep={generationStep}
+            toolTrace={toolTrace}
             onOpenTrip={() => {
               if (lastTrip) navigate({ to: '/trips/$tripId', params: { tripId: lastTrip.id } })
             }}

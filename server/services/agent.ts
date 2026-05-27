@@ -23,7 +23,10 @@ import { conversationPhase } from '../../shared/chatIntent.js'
 import { inferDefaultOrigin } from '../../shared/inferredOrigin.js'
 import { recommendWhenWindows, recommendWhenWindowsForPreference } from '../../shared/recommendWhen.js'
 import { db, id } from '../db/sqlite.js'
+import { parseWhenDateRange } from '../../shared/tripDates.js'
+import { extractResponseText } from './openaiText.js'
 import { createGeneratedTrip } from './planner.js'
+import { generateTripContent } from './tripContent.js'
 import { getTripDetail } from './tripDetail.js'
 
 type AgentContext = {
@@ -32,6 +35,7 @@ type AgentContext = {
   who?: string
   when?: string
   intent?: string
+  activities?: string[]
   budgetLevel?: string
   pace?: string
 }
@@ -112,19 +116,6 @@ function destinationsForAgent() {
     .all() as Array<Record<string, unknown>>
 }
 
-function offersForDestination(destinationName: string) {
-  return db
-    .prepare(
-      `SELECT offers.type, offers.provider, offers.title, offers.price, offers.rating, offers.perks
-       FROM offers
-       LEFT JOIN destinations ON destinations.id = offers.destination_id
-       WHERE LOWER(destinations.name) LIKE LOWER(?)
-       ORDER BY offers.type ASC, offers.price ASC
-       LIMIT 6`,
-    )
-    .all(`%${destinationName.split('+')[0].trim()}%`) as Array<Record<string, unknown>>
-}
-
 function fallbackPlan(input: AgentRequest, trace: AgentTrace[]): AgentPlan {
   const prompt = `${input.prompt} ${Object.values(input.context ?? {}).join(' ')}`
   const lower = prompt.toLowerCase()
@@ -154,10 +145,7 @@ function fallbackPlan(input: AgentRequest, trace: AgentTrace[]): AgentPlan {
     travelerType: input.context?.who || 'couple',
     budgetLevel: input.context?.budgetLevel || 'mid',
     pace: input.context?.pace || 'balanced',
-    tripTitle:
-      selectedDestination === 'Johor Bahru'
-        ? '2-Day Solo Johor Bahru Budget Escape'
-        : `${selectedDestination} agent-built plan`,
+    tripTitle: `${selectedDestination} trip plan`,
     itineraryFocus:
       selectedDestination === 'Johor Bahru'
         ? ['Singapore land route', 'budget overnight stay', 'local cafes and activities']
@@ -166,20 +154,6 @@ function fallbackPlan(input: AgentRequest, trace: AgentTrace[]): AgentPlan {
   }
 }
 
-function extractResponseText(body: Record<string, unknown>) {
-  if (typeof body.output_text === 'string') return body.output_text
-  const output = Array.isArray(body.output) ? body.output : []
-  for (const item of output) {
-    if (!item || typeof item !== 'object') continue
-    const content = Array.isArray((item as { content?: unknown }).content) ? (item as { content: unknown[] }).content : []
-    for (const part of content) {
-      if (part && typeof part === 'object' && typeof (part as { text?: unknown }).text === 'string') {
-        return (part as { text: string }).text
-      }
-    }
-  }
-  return ''
-}
 
 function inferPatch(message: string, current: AgentContext = {}): Required<AgentContext> {
   const lower = message.toLowerCase()
@@ -1070,36 +1044,62 @@ export async function runTravelAgent(input: AgentRequest) {
 
   const modelPlan = await callPlannerModel(input, trace)
   const plan = modelPlan ?? fallbackPlan(input, trace)
-  const offers = offersForDestination(plan.selectedDestination)
 
   trace.push({
     name: 'rank_options',
     label: 'Rank options',
     status: 'complete',
-    result: `Selected ${plan.selectedDestination} with ${normalizeConfidence(plan.confidence)}% confidence based on constraints and seeded destination fit.`,
-  })
-  trace.push({
-    name: 'scan_offers',
-    label: 'Scan offer cards',
-    status: 'complete',
-    result:
-      offers.length > 0
-        ? `Found ${offers.length} simulated flight, hotel, and activity cards for handoff.`
-        : 'No pre-seeded offers matched exactly; the save tool will synthesize demo flight, hotel, and activity cards.',
+    result: `Selected ${plan.selectedDestination} with ${normalizeConfidence(plan.confidence)}% confidence based on chat constraints.`,
   })
 
-  const tripId = createGeneratedTrip({
+  const ctx = input.context ?? {}
+  const focusActivities = ctx.activities?.length ? ctx.activities : ctx.intent ? [ctx.intent] : plan.itineraryFocus
+  const parsedDates = parseWhenDateRange(ctx.when)
+  const startDate = parsedDates.startDate || '2026-08-14'
+  const endDate =
+    parsedDates.endDate ||
+    (() => {
+      const end = new Date(startDate)
+      const offset = /johor|bahru/i.test(plan.selectedDestination) ? 1 : 5
+      end.setDate(end.getDate() + offset)
+      return end.toISOString().slice(0, 10)
+    })()
+
+  const { content: aiContent } = await generateTripContent(
+    {
+      prompt: input.prompt,
+      destination: plan.selectedDestination,
+      origin: plan.origin || ctx.whereFrom || 'Singapore',
+      startDate,
+      endDate,
+      travelerType: plan.travelerType || ctx.who || 'couple',
+      budgetLevel: plan.budgetLevel || ctx.budgetLevel || 'mid',
+      pace: plan.pace || ctx.pace || 'balanced',
+      focusActivities,
+      intent: ctx.intent,
+      tripTitle: plan.tripTitle,
+    },
+    trace,
+  )
+
+  const tripId = await createGeneratedTrip({
     prompt: `${plan.tripTitle}. ${plan.assistantMessage}. Focus: ${plan.itineraryFocus.join(', ')}. Original user ask: ${
       input.prompt
     }`,
-    origin: plan.origin,
-    budgetLevel: plan.budgetLevel,
-    travelerType: plan.travelerType,
-    pace: plan.pace,
+    origin: plan.origin || ctx.whereFrom,
+    whereToHint: ctx.whereTo,
+    whenHint: ctx.when,
+    startDate,
+    endDate,
+    budgetLevel: plan.budgetLevel || ctx.budgetLevel,
+    travelerType: plan.travelerType || ctx.who,
+    pace: plan.pace || ctx.pace,
+    focusActivities,
+    intent: ctx.intent,
+    aiContent,
   })
 
-  db.prepare('UPDATE trips SET title = ?, confidence = ?, updated_at = ? WHERE id = ?').run(
-    plan.tripTitle,
+  db.prepare('UPDATE trips SET confidence = ?, updated_at = ? WHERE id = ?').run(
     normalizeConfidence(plan.confidence),
     new Date().toISOString(),
     tripId,
@@ -1124,6 +1124,6 @@ export async function runTravelAgent(input: AgentRequest) {
     assistantMessage: plan.assistantMessage,
     plan,
     trace,
-    trip: getTripDetail(tripId),
+    trip: await getTripDetail(tripId),
   }
 }
