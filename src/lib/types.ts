@@ -33,6 +33,7 @@ export type TripDay = {
   date: string
   title: string
   summary: string
+  imageUrl: string
   activities: Activity[]
 }
 
@@ -74,6 +75,7 @@ export type Trip = {
   estimatedCost: number
   heroImageUrl: string
   confidence: number
+  focusActivities: string[]
   createdAt: string
   updatedAt: string
 }
@@ -128,6 +130,8 @@ export type AgentPlanResponse = {
   trip: TripDetail
 }
 
+export type ChatMessageIntent = 'checklist_step' | 'add_activity' | 'confirm_trip' | 'change_checklist' | 'clarify'
+
 export type AgentChatResponse = {
   mode: 'model' | 'fallback'
   assistantMessage: string
@@ -141,6 +145,9 @@ export type AgentChatResponse = {
     pace: string
   }
   activeField: 'whereTo' | 'whereFrom' | 'who' | 'when' | 'intent'
+  suggestionField: 'whereTo' | 'whereFrom' | 'who' | 'when' | 'intent'
+  messageIntent: ChatMessageIntent
+  addActivities: string[]
   suggestedReplies: string[]
   shouldFinish: boolean
   confidence: number

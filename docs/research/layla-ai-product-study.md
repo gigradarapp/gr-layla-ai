@@ -2,11 +2,11 @@
 
 Date: 2026-05-25  
 Repo: `gr-layla-ai`  
-Status: Research/spec first. Implementation not started yet.
+Status: V2 research update after initial demo implementation and screenshot capture.
 
 ## Context
 
-The local repo currently has no existing app implementation beyond `README.md`, which says this is a "replication of layla ai". This study therefore treats the public Layla.ai product, website, mobile app listings, and reference screenshots as the source app.
+The local repo now has an initial working web demo plus a captured Layla.ai mobile app screenshot flow in `docs/app-screenshots`. This study treats the public Layla.ai product, website, mobile app listings, and local reference screenshots as the source app for the V2 overhaul.
 
 Reference screenshots saved locally:
 
@@ -14,6 +14,21 @@ Reference screenshots saved locally:
 - `docs/research/assets/layla-appstore-02.png`
 - `docs/research/assets/layla-appstore-03.png`
 - `docs/research/assets/layla-appstore-04.png`
+- `docs/app-screenshots/01_home_trip_prompt.png`
+- `docs/app-screenshots/02_chat_intro_questions.png`
+- `docs/app-screenshots/03_checklist_destination_captured.png`
+- `docs/app-screenshots/04_chat_dates_input.png`
+- `docs/app-screenshots/05_chat_solo_overnight_input.png`
+- `docs/app-screenshots/06_checklist_core_details_captured.png`
+- `docs/app-screenshots/07_chat_budget_trip_summary.png`
+- `docs/app-screenshots/08_chat_summary_confirmation.png`
+- `docs/app-screenshots/09_trip_generation_progress.png`
+- `docs/app-screenshots/10_trip_overview_map.png`
+- `docs/app-screenshots/11_trip_arrival_transport_top.png`
+- `docs/app-screenshots/12_trip_arrival_transport_detail.png`
+- `docs/app-screenshots/13_trip_stay_hotel_card.png`
+- `docs/app-screenshots/14_trip_itinerary_departure.png`
+- `docs/app-screenshots/15_trip_fullscreen_map.png`
 
 Primary sources used:
 
@@ -96,20 +111,104 @@ Implication: the market is real, but the winner will not be a generic itinerary 
 
 ## UX/UI Study
 
+### V2 Screenshot-Based Findings
+
+The app screenshots reveal a more specific target than the earlier public marketing screenshots. The core product is not a dashboard with a chat panel; it is a mobile-first conversational trip funnel where the assistant progressively turns free text into a checklist-backed trip object.
+
+Observed flow from `docs/app-screenshots`:
+
+1. `01_home_trip_prompt.png`
+   - First screen is a focused trip prompt, not a broad app dashboard.
+   - The brand mark sits top-left, account controls sit top-right.
+   - A large organic travel image motif anchors the page above the headline.
+   - Primary input is a large rounded composer with attachment, mic, and send affordances.
+   - Quick chips below the composer offer "Create a new trip" and "Inspire me where to go".
+   - A down cue suggests more help content, but planning remains the first action.
+
+2. `02_chat_intro_questions.png`
+   - The chat opens with a collapsed `TRIP CHECKLIST` bar pinned near the top.
+   - Progress is explicit: `1 of 5 captured`.
+   - User messages are right-aligned lavender bubbles.
+   - Assistant text is plain, conversational, and asks only the next missing details.
+   - Suggestion chips sit above the sticky composer.
+
+3. `03_checklist_destination_captured.png`
+   - Tapping the checklist expands a bottom-sheet-like progress card.
+   - The card shows a circular `1/5` indicator, title, and vertical stepper.
+   - Completed fields use filled dark circular checks.
+   - Empty fields show dotted circles with helper copy.
+   - The composer remains available below the expanded checklist.
+
+4. `04_chat_dates_input.png` and `05_chat_solo_overnight_input.png`
+   - The user can answer in natural language rather than form fields.
+   - The checklist count updates as context is inferred.
+   - The assistant narrows ambiguity in one message, then presents compact reply chips.
+   - The UI avoids exposing raw controls for budget, pace, and travelers unless needed.
+
+5. `06_checklist_core_details_captured.png`
+   - The expanded checklist acts as a user-visible state machine.
+   - Captured fields are human-readable summaries, not raw enum values.
+   - Remaining missing field is clearly indicated without blocking the conversation.
+
+6. `07_chat_budget_trip_summary.png` and `08_chat_summary_confirmation.png`
+   - The assistant summarizes the trip before generation.
+   - The summary is terse and structured: route, dates, style, purpose.
+   - Confirmation chips let the user accept, change dates, or add more activity preferences.
+   - This is the handoff point from collection to generation.
+
+7. `09_trip_generation_progress.png`
+   - Generation becomes a dedicated full-screen progress moment.
+   - The generated trip title appears immediately.
+   - A playful tilted card stack and check-list progress communicate work being done.
+   - Some steps are complete, while later steps show in-progress muted states.
+
+8. `10_trip_overview_map.png` through `15_trip_fullscreen_map.png`
+   - The final trip is not a text document; it is a trip card with map, route, timeline, hotel, itinerary, and booking actions.
+   - Top navigation switches to a detail mode with back, share, and download controls.
+   - The bottom nav has three primary zones: Chat, Trip, Book.
+   - The itinerary uses a vertical timeline with large section icons.
+   - Transportation, stay, and itinerary cards are visually distinct and action-ready.
+   - The map can expand into a full-screen route view with pins, route line, title, and close control.
+
+### V2 Product Implication
+
+The V2 target should not merely make the existing chat prettier. It should rebuild the chat flow around these product mechanics:
+
+- conversation as the primary input surface;
+- checklist as the visible planning state;
+- agentic handholding through the 5-step itinerary-building process;
+- bottom/sticky composer as the constant action surface;
+- generation as a separate emotional progress state;
+- trip result as a mobile itinerary object with map, stay, transport, itinerary, and booking surfaces;
+- desktop as a respectful responsive wrapper around the mobile-first experience, not a separate dashboard-like planner.
+
+Implementation priority: screenshots `01` through `09` are the primary source of truth. Chat fidelity should come before polishing discovery, dashboard, booking, or the full trip-detail surface. The trip-detail screenshots matter because they show where the chat lands, but the chat funnel is the differentiator to replicate first.
+
+The agentic AI behavior matters as much as the visual shell. The assistant should act like a calm travel agent that moves the user from rough intent to a complete dream itinerary by:
+
+- identifying which of the five checklist fields are already known;
+- asking only the next best question;
+- offering compact reply chips for low-effort answers;
+- confirming the accumulated trip shape after each major capture;
+- summarizing the full itinerary brief before generation.
+
 ### Visual Language
 
-Observed from App Store screenshots:
+Observed from App Store and local app screenshots:
 
 - Mobile-first interface.
 - White or very light backgrounds.
 - Large, bold, high-contrast headings.
 - Lavender/purple emphasis words in headings.
-- Teal/turquoise action chips and user reply buttons.
+- Lavender/purple action chips, progress bars, user reply bubbles, and primary send controls.
 - Friendly AI avatar/persona.
-- Rounded chat bubbles, soft shadows, and approachable spacing.
+- Rounded chat bubbles, floating sheets, soft shadows, and approachable spacing.
 - Heavy use of phone mockups in marketing screenshots.
 - Destination cards use vivid travel photography/video thumbnails.
 - Booking/trust partners appear as credibility anchors: Booking.com, Beautiful Destinations, Skyscanner.
+- Icons are functional: plus, profile, chevron, attachment, calendar, mic, share, download, route change, delete, close.
+- Cards use high-radius rounded corners, subtle borders, and light depth.
+- Map and itinerary surfaces become central after generation.
 
 The tone is playful but still utility-driven. It sells speed, not wanderlust alone.
 
@@ -118,8 +217,9 @@ The tone is playful but still utility-driven. It sells speed, not wanderlust alo
 Core surfaces to recreate:
 
 - Home/discovery: trip prompt, quick-start modes, destination inspiration.
-- Chat planner: conversation with Layla, prompt chips, clarifying questions, progress state.
-- Trip result: structured itinerary with days, activities, times, cost hints, notes.
+- Chat planner: conversation with Layla, prompt chips, clarifying questions, collapsible trip checklist, progress state.
+- Trip generation: dedicated animated/progress state after summary confirmation.
+- Trip result: structured mobile itinerary with map, route, arrival/departure transport, stay, day cards, booking affordance, and bottom nav.
 - Destination/video discovery: swipeable or grid cards with destination visuals, weather, estimated flight price.
 - Flights and hotels: partner-style result cards, prices, ratings, perks.
 - Saved trips/bucketlist: saved ideas and generated itineraries.
@@ -179,14 +279,34 @@ Core surfaces to recreate:
 
 The rebuild should be a credible product demo, not a static landing page.
 
+### V2 Overhaul Priority
+
+The highest priority is to overhaul the Layla-style chat so it matches the local screenshots as closely as practical:
+
+- Replace dashboard-like planner chrome with a narrow mobile-first chat surface.
+- Make `/` and `/chat` share the same captured Layla flow from prompt to generated trip.
+- Use the 5-field trip checklist as the main state model:
+  - Where to
+  - Where from
+  - Who's coming
+  - When you'd go
+  - What you're after
+- Support collapsed and expanded checklist states.
+- Keep the composer sticky at the bottom with attachment, calendar, mic, and send icons.
+- Render user bubbles, assistant responses, chips, and generation progress to visually match screenshot spacing, color, and hierarchy.
+- Route generated trips into a detail surface that resembles screenshots `10`-`15`.
+
 ### Must Have
 
 - Working web app shell with responsive desktop and mobile layouts.
 - Chat-first trip planner.
 - Quick-start prompts.
 - Simulated AI planning flow with progressive assistant messages.
-- Itinerary generation from user inputs.
+- Checklist-driven itinerary generation from user inputs.
+- Summary confirmation before final trip generation.
+- Layla-like generation progress screen.
 - Editable/savable trips stored in SQLite.
+- Mobile trip result view with map hero, route timeline, stay card, itinerary cards, bottom nav, share/download controls.
 - Destination inspiration cards.
 - Flight and hotel recommendation cards.
 - Trip detail view with day-by-day schedule.
@@ -204,7 +324,7 @@ The rebuild should be a credible product demo, not a static landing page.
 
 ### Nice to Have
 
-- Map-like route panel using static coordinates.
+- Fullscreen map modal using static coordinates and route markers.
 - Activity cost rollups.
 - Multi-traveler collaboration simulation.
 - "Ask follow-up" inside a trip.
@@ -386,4 +506,3 @@ Best wedge for a smaller team:
 Weak assumption to challenge:
 
 - "AI itinerary generation is the product." It is not. It is the feature users now expect. The product is trusted planning compression plus bookable execution.
-

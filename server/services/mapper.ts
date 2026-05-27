@@ -16,6 +16,7 @@ export type TripRow = {
   estimated_cost: number
   hero_image_url: string
   confidence: number
+  focus_activities?: string
   created_at: string
   updated_at: string
 }
@@ -54,6 +55,7 @@ export function mapTrip(row: TripRow) {
     estimatedCost: row.estimated_cost,
     heroImageUrl: row.hero_image_url,
     confidence: row.confidence,
+    focusActivities: parseJsonArray<string>(row.focus_activities),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -93,6 +95,7 @@ export function mapDay(row: Record<string, unknown>, activities: ReturnType<type
     date: String(row.date),
     title: String(row.title),
     summary: String(row.summary),
+    imageUrl: String(row.image_url ?? ''),
     activities,
   }
 }

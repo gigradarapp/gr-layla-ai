@@ -11,6 +11,7 @@ const agentPlanSchema = z.object({
       who: z.string().optional(),
       when: z.string().optional(),
       intent: z.string().optional(),
+      activities: z.array(z.string()).optional(),
       budgetLevel: z.string().optional(),
       pace: z.string().optional(),
     })
@@ -26,6 +27,7 @@ const agentChatSchema = z.object({
       who: z.string().optional(),
       when: z.string().optional(),
       intent: z.string().optional(),
+      activities: z.array(z.string()).optional(),
       budgetLevel: z.string().optional(),
       pace: z.string().optional(),
     })
@@ -37,6 +39,13 @@ const agentChatSchema = z.object({
         content: z.string(),
       }),
     )
+    .optional(),
+  focusField: z.enum(['whereTo', 'whereFrom', 'who', 'when', 'intent']).optional(),
+  moreSuggestions: z
+    .object({
+      field: z.enum(['whereTo', 'whereFrom', 'who', 'when', 'intent']),
+      exclude: z.array(z.string()),
+    })
     .optional(),
 })
 

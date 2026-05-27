@@ -1,171 +1,470 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from '@tanstack/react-router'
-import { ArrowLeft, CheckCircle2, Clock, MapPinned, Route, Sparkles } from 'lucide-react'
-import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import {
+  ArrowLeft,
+  CalendarDays,
+  Car,
+  ChevronRight,
+  ExternalLink,
+  Hotel,
+  ListChecks,
+  MapPin,
+  ShoppingCart,
+  Shuffle,
+  Trash2,
+  UserRound,
+  X,
+} from 'lucide-react'
+import { resolveHotelBookingUrl } from '../../shared/hotelBookingUrl'
+import { TripOpenMap } from '../components/TripOpenMap'
+import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { ErrorState } from '../components/ErrorState'
 import { LoadingState } from '../components/LoadingState'
-import { MetricCard } from '../components/MetricCard'
-import { OfferCard } from '../features/booking/OfferCard'
+import { pickDayImageUrl, pickStayImageUrl, resolveTripImageUrl } from '../../shared/destinationImages'
+import { TripImage } from '../components/TripImage'
+import { dayExperienceCount, experienceCountLabel } from '../../shared/experienceCount'
+import {
+  defaultStayTier,
+  hotelOffersByTierLists,
+  STAY_TIER_LABELS,
+  STAY_TIERS,
+  type StayTier,
+} from '../../shared/stayTiers'
+import { parseStayPerks } from '../../shared/stayOfferMeta'
 import { api } from '../lib/api'
-import { daysBetween, money, shortDate, titleCase } from '../lib/format'
+import { daysBetween, money, shortDate, travelerCountLabel } from '../lib/format'
+import type { Offer, TripDetail } from '../lib/types'
 
-const refinements = ['Make it cheaper', 'Add more nature', 'More food stops', 'Make it family-friendly', 'Slow the pace']
+function dateRange(trip: TripDetail) {
+  return `${shortDate(trip.startDate)} - ${shortDate(trip.endDate)}`
+}
+
+function transferMeta(trip: TripDetail) {
+  const transfer = trip.offers.find(
+    (offer) =>
+      offer.type === 'activity' && /transfer|car|crossing/i.test(`${offer.title} ${offer.perks.join(' ')}`),
+  )
+  const travelTime = transfer?.perks.find((perk) => /\d+\s*m\b/i.test(perk))
+  return {
+    label: transfer?.title ?? `Private car · ${trip.origin} to ${trip.destination}`,
+    time: travelTime ?? 'Door-to-door',
+    provider: transfer?.provider,
+  }
+}
+
+function introCopy(trip: TripDetail) {
+  const first = trip.summary.split(/[.!?]\s/)[0]?.trim()
+  return first || `Your ${trip.pace} ${trip.travelerType} trip from ${trip.origin} to ${trip.destination}.`
+}
+
+function RouteSelector({ trip }: { trip: TripDetail }) {
+  return (
+    <div className="route-selector-v2" aria-label="Trip route">
+      <span>
+        <MapPin size={16} />
+        {trip.origin}
+      </span>
+      <span className="route-car">
+        <Car size={16} />
+      </span>
+      <strong>
+        {trip.destination}
+        <small>{dateRange(trip)}</small>
+      </strong>
+      <span className="route-car">
+        <Car size={16} />
+      </span>
+      <span>
+        <MapPin size={16} />
+        {trip.origin}
+      </span>
+    </div>
+  )
+}
+
+function TimelineSection({
+  icon,
+  title,
+  meta,
+  children,
+}: {
+  icon: React.ReactNode
+  title: string
+  meta?: string
+  children?: React.ReactNode
+}) {
+  return (
+    <section className="trip-timeline-section">
+      <div className="timeline-icon">{icon}</div>
+      <div className="timeline-content">
+        <h2>
+          {title}
+          {meta ? <span>{meta}</span> : null}
+        </h2>
+        {children}
+      </div>
+    </section>
+  )
+}
+
+function TransportCard({
+  from,
+  to,
+  fromDate,
+  toDate,
+  label,
+  time,
+}: {
+  from: string
+  to: string
+  fromDate: string
+  toDate: string
+  label: string
+  time: string
+}) {
+  return (
+    <article className="transport-card-v2">
+      <div className="transport-route">
+        <div>
+          <strong>{from}</strong>
+          <span>{fromDate}</span>
+        </div>
+        <div className="transport-line">
+          <span />
+          <Car size={25} fill="currentColor" />
+          <span />
+        </div>
+        <div>
+          <strong>{to}</strong>
+          <span>{toDate}</span>
+        </div>
+      </div>
+      <div className="transport-meta">
+        <div>
+          <span>Travel time: {time}</span>
+          <strong>{label}</strong>
+        </div>
+        <button type="button" disabled>
+          <Shuffle size={16} />
+          Change
+        </button>
+      </div>
+    </article>
+  )
+}
+
+function StayCard({
+  offer,
+  destination,
+  tier,
+  tripId,
+  rank,
+}: {
+  offer?: Offer
+  destination: string
+  tier: StayTier
+  tripId: string
+  rank?: number
+}) {
+  const tierIndex = STAY_TIERS.indexOf(tier)
+  const stayImage = resolveTripImageUrl(
+    offer?.imageUrl,
+    pickStayImageUrl(destination, tier, tierIndex >= 0 ? tierIndex : 0),
+  )
+  const meta = parseStayPerks(offer?.perks ?? [])
+  const displayRank = rank ?? meta.rank ?? undefined
+  const rating = offer?.rating
+  const bookingUrl = offer ? resolveHotelBookingUrl(offer.url, offer.title, destination) : null
+  const reviewCountLabel = meta.reviewCount
+    ? `${meta.reviewCount.toLocaleString()} reviews`
+    : meta.reviewLabel || 'Guest reviews'
+
+  return (
+    <article className="stay-card-v2">
+      {displayRank ? <span className="stay-rank-badge">#{displayRank}</span> : null}
+      <div className="stay-main">
+        <TripImage src={stayImage} alt="" />
+        <div>
+          <span className="stars">{rating ? `${rating.toFixed(1)} ★` : 'Hotel stay'}</span>
+          <h3>{offer?.title || `Stay in ${destination}`}</h3>
+          {offer?.provider ? <p className="stay-provider">{offer.provider}</p> : null}
+          <p>{meta.roomDescription || 'Matched hotel option'}</p>
+          {meta.neighborhood ? <small className="stay-neighborhood">{meta.neighborhood}</small> : null}
+          {meta.distanceLabel ? <small className="stay-distance">{meta.distanceLabel}</small> : null}
+          {meta.amenities.slice(0, 3).map((amenity) => (
+            <small key={amenity}>{amenity}</small>
+          ))}
+          {meta.policies.slice(0, 2).map((policy) => (
+            <small key={policy} className="stay-policy">
+              {policy}
+            </small>
+          ))}
+        </div>
+      </div>
+      {rating ? (
+        <div className="review-row">
+          <strong>{rating.toFixed(1)}</strong>
+          <div>
+            <b>{rating >= 4.5 ? 'Excellent' : rating >= 4 ? 'Great' : rating >= 3.5 ? 'Good' : 'Fair'}</b>
+            <span>{reviewCountLabel}</span>
+          </div>
+        </div>
+      ) : null}
+      <div className="stay-price-row">
+        <div>
+          <span>from</span>
+          <strong>{money(offer?.price ?? 0)}</strong>
+          <small>Check live rates on Booking.com</small>
+        </div>
+        <button type="button" disabled>
+          <Shuffle size={16} />
+          Change
+        </button>
+        <button type="button" aria-label="Remove stay" disabled>
+          <Trash2 size={17} />
+        </button>
+      </div>
+      {bookingUrl ? (
+        <div className="stay-booking-actions">
+          <a
+            href={bookingUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="stay-booking-link primary"
+          >
+            View on Booking.com
+            <ExternalLink size={15} />
+          </a>
+          <Link
+            to="/book"
+            search={{ tripId }}
+            className="stay-booking-link secondary"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            All trip offers
+          </Link>
+        </div>
+      ) : null}
+    </article>
+  )
+}
+
+function StayRecommendations({ trip }: { trip: TripDetail }) {
+  const byTier = hotelOffersByTierLists(trip.offers)
+  const [selectedTier, setSelectedTier] = useState<StayTier>(() => defaultStayTier(trip.budgetLevel))
+
+  useEffect(() => {
+    setSelectedTier(defaultStayTier(trip.budgetLevel))
+  }, [trip.id, trip.budgetLevel])
+
+  const tierOffers = byTier[selectedTier]
+
+  return (
+    <div className="stay-recommendations">
+      <div className="stay-tier-picker segmented-control" role="tablist" aria-label="Choose hotel tier">
+        {STAY_TIERS.map((tier) => {
+          const offers = byTier[tier]
+          const fromPrice = offers.length > 0 ? Math.min(...offers.map((offer) => offer.price)) : null
+          return (
+            <button
+              key={tier}
+              type="button"
+              role="tab"
+              aria-selected={selectedTier === tier}
+              className={`stay-tier-tab stay-tier-${tier}${selectedTier === tier ? ' active' : ''}`}
+              onClick={() => setSelectedTier(tier)}
+            >
+              <span>{STAY_TIER_LABELS[tier]}</span>
+              {fromPrice != null ? <small>from {money(fromPrice)}</small> : <small>—</small>}
+            </button>
+          )
+        })}
+      </div>
+      <div
+        className="stay-options-scroll"
+        role="list"
+        aria-label={`${STAY_TIER_LABELS[selectedTier]} stay options, best rated first`}
+      >
+        {tierOffers.length > 0 ? (
+          tierOffers.map((offer, index) => (
+            <StayCard
+              key={offer.id}
+              tier={selectedTier}
+              offer={offer}
+              destination={trip.destination}
+              tripId={trip.id}
+              rank={index + 1}
+            />
+          ))
+        ) : (
+          <StayCard tier={selectedTier} destination={trip.destination} tripId={trip.id} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ItineraryCard({
+  day,
+  tripId,
+  imageUrl,
+  focusActivities,
+}: {
+  day: TripDetail['days'][number]
+  tripId: string
+  imageUrl: string
+  focusActivities: string[]
+}) {
+  const experiences = dayExperienceCount(day.dayNumber, focusActivities, day.activities)
+
+  return (
+    <Link
+      to="/trips/$tripId/days/$dayId"
+      params={{ tripId, dayId: day.id }}
+      className="itinerary-card-v2"
+      aria-label={`Open Day ${day.dayNumber} itinerary`}
+    >
+      <TripImage src={imageUrl} alt="" />
+      <div>
+        <span>
+          Day {day.dayNumber} · {experienceCountLabel(experiences)} · {shortDate(day.date)}
+        </span>
+        <h3>{day.title}</h3>
+        {day.summary ? <p>{day.summary}</p> : null}
+      </div>
+      <ChevronRight size={22} aria-hidden />
+    </Link>
+  )
+}
+
+function BottomNav({ tripId }: { tripId: string }) {
+  return (
+    <nav className="trip-bottom-nav" aria-label="Trip tabs">
+      <Link to="/chat">
+        <UserRound size={20} />
+        <span>Chat</span>
+      </Link>
+      <Link to="/trips/$tripId" params={{ tripId }} className="active">
+        <ListChecks size={24} />
+        <span>Trip</span>
+      </Link>
+      <Link to="/book" search={{ tripId }}>
+        <ShoppingCart size={23} />
+        <span>Book</span>
+      </Link>
+    </nav>
+  )
+}
 
 export function TripDetailPage() {
   const { tripId } = useParams({ from: '/trips/$tripId' })
-  const queryClient = useQueryClient()
-  const [customRefinement, setCustomRefinement] = useState('')
+  const [mapOpen, setMapOpen] = useState(false)
   const query = useQuery({ queryKey: ['trip', tripId], queryFn: () => api.trip(tripId) })
-  const refine = useMutation({
-    mutationFn: (value: string) => api.refineTrip(tripId, value),
-    onSuccess: async () => {
-      setCustomRefinement('')
-      await queryClient.invalidateQueries({ queryKey: ['trip', tripId] })
-      await queryClient.invalidateQueries({ queryKey: ['trips'] })
-      await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
-    },
-  })
 
   if (query.isLoading) return <LoadingState />
   if (query.isError) return <ErrorState error={query.error} />
   if (!query.data) return <ErrorState error={new Error('Trip not found')} />
 
   const trip = query.data
-  const totalActivities = trip.days.reduce((count, day) => count + day.activities.length, 0)
-  const activityCost = trip.days.reduce(
-    (sum, day) => sum + day.activities.reduce((daySum, activity) => daySum + activity.cost, 0),
-    0,
-  )
-
+  const transport = transferMeta(trip)
+  const totalDays = daysBetween(trip.startDate, trip.endDate)
+  const nights = Math.max(1, totalDays - 1)
   return (
-    <div className="page">
-      <Link to="/trips" className="back-link">
-        <ArrowLeft size={16} />
-        Back to trips
-      </Link>
+    <section className="layla-trip-route">
+      <div className="layla-trip-frame">
+        <header className="trip-detail-topbar">
+          <Link to="/chat">
+            <ArrowLeft size={22} />
+            <span>Chat</span>
+          </Link>
+        </header>
 
-      <section className="trip-hero">
-        <img src={trip.heroImageUrl} alt="" />
-        <div className="trip-hero-copy">
-          <span className="live-dot">{trip.confidence}% confidence</span>
-          <h1>{trip.title}</h1>
-          <p>{trip.summary}</p>
-          <div className="hero-proof">
-            <span>
-              <MapPinned size={16} />
-              {trip.origin} to {trip.destination}
-            </span>
-            <span>
-              <Clock size={16} />
-              {shortDate(trip.startDate)} · {daysBetween(trip.startDate, trip.endDate)} days
-            </span>
-            <span>
-              <Route size={16} />
-              {titleCase(trip.pace)} pace
-            </span>
-          </div>
-        </div>
-      </section>
+        <main className="trip-detail-scroll">
+          <TripOpenMap trip={trip} onExpand={() => setMapOpen(true)} />
 
-      <section className="metrics-row">
-        <MetricCard label="Trip value" value={money(trip.estimatedCost)} detail="simulated total" />
-        <MetricCard label="Activities" value={totalActivities} detail="scheduled blocks" />
-        <MetricCard label="On-ground spend" value={money(activityCost)} detail="activity estimate" />
-        <MetricCard label="Traveler type" value={titleCase(trip.travelerType)} detail={titleCase(trip.budgetLevel)} />
-      </section>
+          <section className="trip-title-v2">
+            <h1>{trip.title}</h1>
+            <p>
+              <UserRound size={16} />
+              {travelerCountLabel(trip.travelerType)}
+              <CalendarDays size={16} />
+              {dateRange(trip)}
+            </p>
+          </section>
 
-      <section className="detail-layout">
-        <div className="itinerary-column">
-          <div className="section-heading tight">
-            <div>
-              <h2>Day-by-day plan</h2>
-              <p>Structured output turns chat into an editable schedule.</p>
-            </div>
-          </div>
-          {trip.days.map((day) => (
-            <article key={day.id} className="day-card">
-              <div className="day-header">
-                <span>Day {day.dayNumber}</span>
-                <div>
-                  <h3>{day.title}</h3>
-                  <p>{day.summary}</p>
-                </div>
+          <RouteSelector trip={trip} />
+
+          <div className="trip-timeline-v2">
+            <TimelineSection icon={<MapPin size={25} fill="currentColor" />} title={trip.destination}>
+              <div className="destination-intro">
+                <strong>
+                  Day 1 <span>· {shortDate(trip.startDate)}</span>
+                </strong>
+                <p>{introCopy(trip)}</p>
               </div>
-              <div className="activity-list">
-                {day.activities.map((activity) => (
-                  <div key={activity.id} className="activity-row">
-                    <time>{activity.time}</time>
-                    <div>
-                      <strong>{activity.title}</strong>
-                      <span>
-                        {activity.location} · {titleCase(activity.category)} · {money(activity.cost)}
-                      </span>
-                      <small>
-                        <CheckCircle2 size={13} />
-                        {activity.confidence}% confidence · {activity.notes}
-                      </small>
-                    </div>
-                  </div>
+            </TimelineSection>
+
+            <TimelineSection icon={<Car size={23} fill="currentColor" />} title="Arrive" meta={shortDate(trip.startDate)}>
+              <TransportCard
+                from={trip.origin}
+                to={trip.destination}
+                fromDate={shortDate(trip.startDate)}
+                toDate={shortDate(trip.startDate)}
+                label={transport.label}
+                time={transport.time}
+              />
+            </TimelineSection>
+
+            <TimelineSection icon={<Hotel size={23} />} title="Stay" meta={`${dateRange(trip)} · ${nights} night${nights === 1 ? '' : 's'}`}>
+              <StayRecommendations trip={trip} />
+            </TimelineSection>
+
+            <TimelineSection icon={<CalendarDays size={23} />} title="Itinerary" meta={dateRange(trip)}>
+              <div className="itinerary-list-v2">
+                {trip.days.map((day, index) => (
+                  <ItineraryCard
+                    key={day.id}
+                    tripId={trip.id}
+                    day={day}
+                    focusActivities={trip.focusActivities ?? []}
+                    imageUrl={resolveTripImageUrl(day.imageUrl, pickDayImageUrl(trip.destination, day, index), trip.heroImageUrl)}
+                  />
                 ))}
               </div>
-            </article>
-          ))}
-        </div>
+            </TimelineSection>
 
-        <aside className="side-panel">
-          <h2>Refine with chat</h2>
-          <p>Quick actions simulate the operator loop: ask, update, preserve state.</p>
-          <div className="refine-actions">
-            {refinements.map((item) => (
-              <button key={item} type="button" onClick={() => refine.mutate(item)} disabled={refine.isPending}>
-                <Sparkles size={14} />
-                {item}
-              </button>
-            ))}
+            <TimelineSection icon={<Car size={23} fill="currentColor" />} title="Depart" meta={shortDate(trip.endDate)}>
+              <TransportCard
+                from={trip.destination}
+                to={trip.origin}
+                fromDate={shortDate(trip.endDate)}
+                toDate={shortDate(trip.endDate)}
+                label={transport.label}
+                time={transport.time}
+              />
+            </TimelineSection>
           </div>
-          <div className="custom-refine">
-            <input
-              value={customRefinement}
-              onChange={(event) => setCustomRefinement(event.target.value)}
-              placeholder="Ask for another change"
-            />
-            <button
-              type="button"
-              className="primary-action small"
-              disabled={refine.isPending || customRefinement.length < 3}
-              onClick={() => refine.mutate(customRefinement)}
-            >
-              Apply
-            </button>
-          </div>
-          {refine.data ? <div className="success-note">{refine.data.resultSummary}</div> : null}
+        </main>
 
-          <h2>Chat log</h2>
-          <div className="compact-messages">
-            {trip.messages.map((message) => (
-              <div key={message.id} className={`compact-message ${message.role}`}>
-                <strong>{message.role}</strong>
-                <span>{message.content}</span>
-              </div>
-            ))}
-          </div>
-        </aside>
-      </section>
+        <BottomNav tripId={trip.id} />
 
-      <section className="section-heading">
-        <div>
-          <h2>Bookable-style options</h2>
-          <p>These cards are simulated handoffs, designed to show how booking monetization would fit.</p>
-        </div>
-        <Link to="/book" search={{ tripId: trip.id }} className="secondary-action">
-          See booking board
-        </Link>
-      </section>
-      <div className="offer-grid">
-        {trip.offers.map((offer) => (
-          <OfferCard key={offer.id} offer={offer} />
-        ))}
+        {mapOpen
+          ? createPortal(
+              <div className="fullscreen-map-modal" role="dialog" aria-modal="true" aria-label="Trip map">
+                <div className="map-modal-topbar">
+                  <strong>{trip.title}</strong>
+                  <button type="button" aria-label="Close map" onClick={() => setMapOpen(false)}>
+                    <X size={22} />
+                  </button>
+                </div>
+                <TripOpenMap trip={trip} fullscreen />
+              </div>,
+              document.body,
+            )
+          : null}
       </div>
-    </div>
+    </section>
   )
 }

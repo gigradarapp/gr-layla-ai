@@ -11,10 +11,16 @@ const types = ['all', 'flight', 'hotel', 'activity']
 export function BookingPage() {
   const search = useSearch({ from: '/book' }) as { tripId?: string }
   const [type, setType] = useState('all')
+  const tripQuery = useQuery({
+    queryKey: ['trip', search.tripId],
+    queryFn: () => api.trip(search.tripId!),
+    enabled: Boolean(search.tripId),
+  })
   const query = useQuery({
     queryKey: ['offers', search.tripId, type],
     queryFn: () => api.offers({ tripId: search.tripId, type: type === 'all' ? undefined : type }),
   })
+  const tripDestination = tripQuery.data?.destination
 
   return (
     <div className="page">
@@ -41,7 +47,7 @@ export function BookingPage() {
       ) : (
         <div className="offer-grid">
           {query.data?.map((offer) => (
-            <OfferCard key={offer.id} offer={offer} />
+            <OfferCard key={offer.id} offer={offer} destination={tripDestination} />
           ))}
         </div>
       )}

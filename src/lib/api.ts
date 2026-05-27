@@ -64,6 +64,7 @@ export const api = {
       who?: string
       when?: string
       intent?: string
+      activities?: string[]
       budgetLevel?: string
       pace?: string
     }
@@ -81,10 +82,16 @@ export const api = {
       who?: string
       when?: string
       intent?: string
+      activities?: string[]
       budgetLevel?: string
       pace?: string
     }
     history: Array<{ role: 'user' | 'assistant'; content: string }>
+    focusField?: 'whereTo' | 'whereFrom' | 'who' | 'when' | 'intent'
+    moreSuggestions?: {
+      field: 'whereTo' | 'whereFrom' | 'who' | 'when' | 'intent'
+      exclude: string[]
+    }
   }) {
     return request<AgentChatResponse>('/api/agent/chat', {
       method: 'POST',

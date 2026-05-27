@@ -2,6 +2,10 @@
 
 Date: 2026-05-25
 
+V2 update: incorporate local Layla.ai app flow screenshots from `docs/app-screenshots`.
+
+V2 priority: chat replication is the main work. Screenshots `01` through `09` define the product experience to match first; trip detail screenshots `10` through `15` are the generated output surface after the chat is right.
+
 ## Product Pattern
 
 Layla's pattern is not a normal travel search page. It is a consumer AI assistant wrapped around travel decision-making:
@@ -48,6 +52,22 @@ Observed patterns from public Layla screenshots:
 - friendly AI persona;
 - booking partner/trust cues.
 
+Observed patterns from local app screenshots:
+
+- the app is designed as a phone-native chat funnel first;
+- the initial screen has a simple top brand bar, organic travel image motif, large centered headline, and oversized composer;
+- the chat screen keeps a `TRIP CHECKLIST` progress bar pinned near the top;
+- progress is shown as both a thin lavender bar and text such as `1 of 5 captured`;
+- the checklist expands into a rounded white sheet with a radial count and vertical stepper;
+- completed checklist items use dark filled circular checks;
+- incomplete checklist items use dotted circular markers and muted helper copy;
+- user bubbles are right-aligned lavender blocks with rounded corners;
+- assistant messages are mostly unboxed body text, which keeps the experience less chatbot-heavy;
+- reply chips are small pill buttons above the composer;
+- the composer is fixed at the bottom and contains attachment, calendar, mic, and send controls;
+- the generation screen uses a lavender full-screen background, tilted card stack, and progressive task list;
+- the trip result shifts to a map/timeline product surface with back, share, download, bottom navigation, route cards, hotel cards, and itinerary cards.
+
 ## Implemented Design Translation
 
 The rebuilt demo uses:
@@ -62,6 +82,16 @@ The rebuilt demo uses:
 - mobile-responsive planner panels;
 - no copied Layla logo or proprietary assets.
 
+V2 should change this translation:
+
+- keep a non-proprietary brand name, but the layout should be materially closer to Layla's captured mobile UI;
+- replace exposed planner settings with inferred chat capture and context chips only when helpful;
+- reduce dashboard-style framing around the chat;
+- make the mobile chat frame the canonical product UI on desktop and mobile;
+- use lavender as the dominant interaction accent for bubbles, progress, chips, and send states;
+- preserve the lightweight white background, soft dividers, subtle shadows, and generous rounded sheets;
+- make map and trip cards first-class after generation instead of secondary detail pages.
+
 ## Route-Level UX
 
 ### `/`
@@ -70,16 +100,16 @@ Purpose: immediate product proof.
 
 Contains:
 
-- headline;
-- planner panel;
-- quick-start modes;
-- saved trip metrics;
-- destination cards;
-- saved itinerary preview.
+- top brand/action bar;
+- organic destination image motif;
+- large centered promise: `Your trip. Planned in minutes.`;
+- oversized chat composer;
+- quick-start chips;
+- scroll cue for secondary help content.
 
 Success condition:
 
-- user can understand and start the trip-planning job without reading documentation.
+- user can start planning in one action and the first viewport feels like `01_home_trip_prompt.png`.
 
 ### `/chat`
 
@@ -87,20 +117,22 @@ Purpose: focus the core planner loop.
 
 Contains:
 
-- chat planner;
-- prompt field;
-- live trip checklist with captured fields;
-- quick destination and constraint chips;
-- destination candidate cards;
-- backend agent run trace;
-- origin/budget/traveler controls;
-- generation progress;
-- generated trip card.
+- top brand/action bar;
+- collapsed trip checklist progress bar;
+- expanded trip checklist sheet;
+- right-aligned user bubbles;
+- plain assistant response text;
+- contextual reply chips;
+- sticky bottom composer;
+- summary confirmation state;
+- generation progress state;
+- generated trip handoff.
 
 Success condition:
 
 - user can generate a SQLite-backed itinerary.
 - when an OpenAI key is configured, the backend agent calls the model for structured planning output before saving the itinerary.
+- the chat progression visually follows screenshots `02` through `09`.
 
 ### `/discover`
 
@@ -135,17 +167,20 @@ Purpose: make AI output operational.
 
 Contains:
 
-- hero summary;
-- cost and schedule metrics;
-- day-by-day itinerary;
-- activities with confidence labels;
-- refinement actions;
-- chat log;
-- booking-style options.
+- top detail nav with back, share, and download controls;
+- map-first trip overview;
+- horizontal route selector;
+- large destination/timeline heading;
+- arrival and departure transport cards;
+- stay card with rating, price, change/delete controls, and contextual note;
+- itinerary day cards;
+- bottom nav with Chat, Trip, and Book zones;
+- fullscreen map modal.
 
 Success condition:
 
 - user can inspect and refine a saved plan.
+- the result surface visually follows screenshots `10` through `15`.
 
 ### `/book`
 
@@ -178,11 +213,56 @@ Success condition:
 
 ## Responsive Rules
 
-- Desktop uses a two-column hero: promise on the left, planner on the right.
-- Mobile stacks hero and planner.
+- Desktop may use a centered phone-width app frame with restrained side context; the app frame remains the canonical UI.
+- Mobile uses the app frame full-width.
+- The chat composer is sticky at the bottom on both desktop app-frame and mobile layouts.
 - Headings wrap aggressively to avoid overflow.
 - Cards collapse from 3-4 columns to 1 column.
 - Navigation scrolls horizontally on small screens.
+
+## V2 Chat State Model
+
+The chat should be implemented as a small state machine, not as loosely rendered messages. This is the most important V2 interaction to replicate.
+
+The state machine should feel agentic and guided. The user should never feel like they are filling out a form alone; Layla-style AI should hold the user's hand through each missing planning decision until the itinerary is ready to build.
+
+1. `home_prompt`
+   - visible in `/`;
+   - input composer and quick-start chips.
+2. `collecting`
+   - visible in `/chat`;
+   - collapsed checklist with current count;
+   - assistant asks for the next missing field.
+3. `checklist_expanded`
+   - same route;
+   - progress sheet overlays the chat area.
+4. `summary_confirmation`
+   - assistant shows route, dates, style, and purpose;
+   - chips: confirm summary, change dates, add more activities.
+5. `generating`
+   - full-screen lavender progress state;
+   - task list shows completed/current/pending states.
+6. `trip_ready`
+   - user lands on map/timeline trip detail.
+
+Checklist fields:
+
+- `whereTo`
+- `whereFrom`
+- `who`
+- `when`
+- `intent`
+
+The UI should show captured values as readable trip language, e.g. `Johor Bahru`, `Singapore`, `Solo`, `This weekend or next weekend, overnight stay`.
+
+Agentic guidance rules:
+
+- infer fields from natural language before asking more questions;
+- ask one next-best question at a time;
+- make each assistant turn explain what is already understood and what is still needed;
+- use reply chips as shortcuts, not replacements for natural language;
+- celebrate progress lightly through checklist movement rather than marketing copy;
+- show the final brief as route, dates, style, and purpose before generating the itinerary.
 
 ## Trust and Compliance Choices
 
@@ -191,3 +271,8 @@ Success condition:
 - Activity notes tell users to verify live details.
 - No real partner integrations are claimed.
 - No proprietary Layla brand assets are copied.
+
+V2 compliance note:
+
+- The screenshots are used as interaction and layout references only.
+- The implementation should avoid the exact Layla logo, proprietary imagery, exact partner claims, and misleading live-inventory language.

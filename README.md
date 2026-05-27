@@ -19,8 +19,10 @@ npm run db:seed
 npm run dev
 ```
 
-Frontend: http://localhost:5173  
+Frontend: http://localhost:5193  
 API: http://localhost:4000
+
+Layla uses port **5193** on purpose so it does not clash with `gr-frontend` (Buzo) on 5173/5174.
 
 ## Notes
 
